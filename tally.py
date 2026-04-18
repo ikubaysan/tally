@@ -3,7 +3,7 @@ import threading
 from datetime import datetime
 import os
 import json
-
+import time
 
 # =========================
 # Objective
@@ -335,6 +335,7 @@ class Tracker:
         self.create_objective()
 
         while True:
+            time.sleep(0.1)
             pass
 
 
