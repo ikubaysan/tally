@@ -198,13 +198,44 @@ class Tracker:
 
         print("\n--- New Objective ---")
 
+        # -------------------------
+        # Name input
+        # -------------------------
         name = ""
         while not name:
             name = input("Enter objective name: ").strip()
 
-        self.current = Objective(name=name, target=10)
+        # -------------------------
+        # Target input (NEW)
+        # -------------------------
+        while True:
 
-        print(f"Started: {name} (target: 10)\n")
+            target_input = input("Enter target (default 10): ").strip()
+
+            # default case
+            if target_input == "":
+                target = 10
+                break
+
+            # validation
+            if not target_input.isdigit():
+                print("❌ Please enter a positive whole number or press Enter for default.")
+                continue
+
+            target = int(target_input)
+
+            if target <= 0:
+                print("❌ Target must be greater than 0.")
+                continue
+
+            break
+
+        # -------------------------
+        # Create objective
+        # -------------------------
+        self.current = Objective(name=name, target=target)
+
+        print(f"Started: {name} (target: {target})\n")
 
     # =========================
     # Display
