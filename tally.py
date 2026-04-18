@@ -6,12 +6,12 @@ import json
 
 
 # =========================
-# Objective Class
+# Objective
 # =========================
 
 class Objective:
 
-    def __init__(self, name="Default Objective", target=None):
+    def __init__(self, name, target=10):
 
         self.name = name
         self.target = target
@@ -26,18 +26,15 @@ class Objective:
 
         self.completed = False
         self.completed_time = None
+        self.exported = False
 
     # =========================
-    # Completion check
+    # Completion
     # =========================
 
     def _check_completion(self):
 
-        if (
-            self.target is not None
-            and not self.completed
-            and self.count == self.target
-        ):
+        if not self.completed and self.count >= self.target:
             self.completed = True
             self.completed_time = datetime.now()
 
@@ -64,7 +61,7 @@ class Objective:
             return
 
         self.count -= 1
-        self.attempts -= 1   # ✅ FIXED: now decreases
+        self.attempts -= 1  # <-- FIXED: now decreases
 
         self.last_action_time = datetime.now()
         self.last_action_type = "Dec"
@@ -84,14 +81,14 @@ class Objective:
     # Time
     # =========================
 
-    def get_elapsed_time(self):
+    def elapsed(self):
 
         end = self.completed_time or datetime.now()
         return end - self.start_time
 
-    def get_elapsed_str(self):
+    def elapsed_str(self):
 
-        total = int(self.get_elapsed_time().total_seconds())
+        total = int(self.elapsed().total_seconds())
 
         h = total // 3600
         m = (total % 3600) // 60
@@ -100,24 +97,28 @@ class Objective:
         return f"{h:02}:{m:02}:{s:02}"
 
     # =========================
-    # Stats
+    # Export
     # =========================
 
-    def get_final_stats(self):
+    def export(self):
 
-        return (
-            f"\n--- FINAL STATS ---\n"
-            f"Objective: {self.name}\n"
-            f"Target: {self.target}\n"
-            f"Final Count: {self.count}\n"
-            f"Attempts: {self.attempts}\n"
-            f"Resets: {self.resets}\n"
-            f"Total Time: {self.get_elapsed_str()}\n"
-        )
+        if self.exported:
+            return
 
-    def to_dict(self):
+        os.makedirs("results", exist_ok=True)
 
-        return {
+        timestamp = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
+        filename = f"results/{self.name}_{timestamp}.json"
+        filename = filename.replace(" ", "_")
+
+        elapsed = self.elapsed()
+
+        total = int(elapsed.total_seconds())
+        h = total // 3600
+        m = (total % 3600) // 60
+        s = total % 60
+
+        data = {
             "name": self.name,
             "target": self.target,
             "final_count": self.count,
@@ -129,212 +130,166 @@ class Objective:
                 self.completed_time.isoformat()
                 if self.completed_time else None
             ),
-            "elapsed_seconds": int(
-                self.get_elapsed_time().total_seconds()
-            ),
+            "elapsed_seconds": total,
+            "elapsed_hms": f"{h:02}:{m:02}:{s:02}",  # ✅ NEW FIELD
         }
 
+        with open(filename, "w", encoding="utf-8") as f:
+            json.dump(data, f, indent=4)
+
+        print(f"\n📁 Saved: {filename}")
+        print("✔ Export complete")
+
+        self.exported = True
+
+    # =========================
+    # Stats
+    # =========================
+
+    def print_stats(self):
+
+        print("\n--- FINAL STATS ---")
+        print(f"Objective: {self.name}")
+        print(f"Target: {self.target}")
+        print(f"Final Count: {self.count}")
+        print(f"Attempts: {self.attempts}")
+        print(f"Resets: {self.resets}")
+        print(f"Total Time: {self.elapsed_str()}")
+
 
 # =========================
-# Manager
+# Tracker
 # =========================
 
-class ObjectiveManager:
+class Tracker:
 
-    DEFAULT_KEYS = {
-        "increment": ["up"],
-        "decrement": ["down"],
-        "reset": ["left", "right"],
-        "new_objective": ["n"],
-        "exit": ["esc"],
-    }
-
-    ACTION_DISPLAY_NAMES = {
-        "increment": "Increment",
-        "decrement": "Decrement",
-        "reset": "Reset",
-        "new_objective": "New Objective",
-        "exit": "Exit",
-    }
-
-    def __init__(self, key_bindings=None):
-
-        self.key_bindings = key_bindings or self.DEFAULT_KEYS
-
-        self.objectives = []
-        self.current_objective = None
+    def __init__(self):
 
         self.lock = threading.Lock()
+        self.locked = False
 
-        self._create_default_objective()
+        self.current = None
+        self.running = True
 
-    # =========================
-    # Default objective
-    # =========================
+        self.key_bindings = {
+            "Increment": ["up"],
+            "Decrement": ["down"],
+            "Reset": ["left", "right"],
+        }
 
-    def _create_default_objective(self):
-
-        obj = Objective()
-
-        self.objectives.append(obj)
-        self.current_objective = obj
-
-    # =========================
-    # Export
-    # =========================
-
-    def _export_objective(self, obj):
-
-        os.makedirs("results", exist_ok=True)
-
-        timestamp = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
-
-        filename = f"results/{obj.name}_{timestamp}.json"
-        filename = filename.replace(" ", "_")
-
-        with open(filename, "w", encoding="utf-8") as f:
-            json.dump(obj.to_dict(), f, indent=4)
-
-        print(f"\n📁 Results saved to: {filename}")
-        print("✔ Objective results exported successfully.")
+        self._register_hotkeys()
 
     # =========================
-    # Completion
+    # Display bindings
     # =========================
 
-    def _handle_completion(self, obj):
+    def print_bindings(self):
 
-        print(obj.get_final_stats())
-        self._export_objective(obj)
+        print("Key Bindings:")
+
+        for action, keys in self.key_bindings.items():
+            print(f"  {action:<15} -> {', '.join(keys)}")
 
     # =========================
     # Create objective
     # =========================
 
-    def create_new_objective(self):
+    def create_objective(self):
 
-        print("\n--- Create New Objective ---")
+        print("\n--- New Objective ---")
 
-        while True:
+        name = ""
+        while not name:
             name = input("Enter objective name: ").strip()
-            if name:
-                break
-            print("Name cannot be empty.")
 
-        while True:
-            target_input = input(
-                "Enter target goal (blank for none): "
-            ).strip()
+        self.current = Objective(name=name, target=10)
 
-            if target_input == "":
-                target = None
-                break
-
-            if not target_input.isdigit():
-                print("Must be a positive integer.")
-                continue
-
-            target = int(target_input)
-
-            if target <= 0:
-                print("Must be > 0.")
-                continue
-
-            break
-
-        obj = Objective(name, target)
-
-        self.objectives.append(obj)
-        self.current_objective = obj
-
-        print(f"Objective '{name}' created.")
+        print(f"Started: {name} (target: 10)\n")
 
     # =========================
     # Display
     # =========================
 
-    def _print_status(self, action=""):
+    def show(self):
 
-        obj = self.current_objective
+        obj = self.current
 
         last = "None"
 
-        if obj.last_action_time and obj.last_action_type:
+        if obj.last_action_time:
             t = obj.last_action_time.strftime("%H:%M:%S")
             last = f"{obj.last_action_type} @ {t}"
 
-        target = f"/{obj.target}" if obj.target else ""
-
-        line = (
-            f"Objective: {obj.name} | "
-            f"Count: {obj.count}{target} | "
+        print(
+            f"\rObjective: {obj.name} | "
+            f"Count: {obj.count}/{obj.target} | "
             f"Attempts: {obj.attempts} | "
             f"Resets: {obj.resets} | "
-            f"Elapsed Time: {obj.get_elapsed_str()} | "
-            f"Last Action: {last}"
+            f"Time: {obj.elapsed_str()} | "
+            f"Last: {last}      ",
+            end=""
         )
 
-        print("\r" + line + " " * 10, end="", flush=True)
+    # =========================
+    # Completion flow
+    # =========================
+
+    def handle_completion(self):
+
+        obj = self.current
+
+        if not obj.completed or obj.exported:
+            return
+
+        self.locked = True
+
+        print("\n")
+        obj.print_stats()
+        obj.export()
+
+        self.create_objective()
+
+        self.locked = False
 
     # =========================
     # Actions
     # =========================
 
-    def increment(self):
+    def inc(self):
 
         with self.lock:
+            if self.locked:
+                return
+            self.current.increment()
+            self.show()
+            self.handle_completion()
 
-            obj = self.current_objective
-            obj.increment()
-
-            self._print_status()
-
-            if obj.completed:
-                self._handle_completion(obj)
-
-    def decrement(self):
+    def dec(self):
 
         with self.lock:
-
-            obj = self.current_objective
-            obj.decrement()
-
-            self._print_status()
+            if self.locked:
+                return
+            self.current.decrement()
+            self.show()
 
     def reset(self):
 
         with self.lock:
-
-            obj = self.current_objective
-            obj.reset()
-
-            self._print_status()
+            if self.locked:
+                return
+            self.current.reset()
+            self.show()
 
     # =========================
     # Hotkeys
     # =========================
 
-    def register_hotkeys(self):
+    def _register_hotkeys(self):
 
-        for action, keys in self.key_bindings.items():
-
-            for key in keys:
-
-                if action == "increment":
-                    keyboard.add_hotkey(key, self.increment)
-
-                elif action == "decrement":
-                    keyboard.add_hotkey(key, self.decrement)
-
-                elif action == "reset":
-                    keyboard.add_hotkey(key, self.reset)
-
-                elif action == "new_objective":
-                    keyboard.add_hotkey(key, self.create_new_objective)
-
-    def wait_for_exit(self):
-
-        keyboard.wait(self.key_bindings["exit"][0])
+        keyboard.add_hotkey("up", self.inc)
+        keyboard.add_hotkey("down", self.dec)
+        keyboard.add_hotkey("left", self.reset)
+        keyboard.add_hotkey("right", self.reset)
 
     # =========================
     # Run
@@ -344,38 +299,17 @@ class ObjectiveManager:
 
         print("Objective Tracker Started\n")
 
-        print("Key Bindings:")
+        self.print_bindings()
 
-        for k, v in self.key_bindings.items():
-            name = self.ACTION_DISPLAY_NAMES.get(
-                k, k.replace("_", " ").title()
-            )
-            print(f"  {name:15} -> {', '.join(v)}")
+        self.create_objective()
 
-        print("\nCommands: N = New Objective\n")
-
-        self.register_hotkeys()
-
-        self._print_status()
-
-        self.wait_for_exit()
-
-        print("\nExiting...")
+        while True:
+            pass
 
 
 # =========================
-# Entry point
+# Entry
 # =========================
 
 if __name__ == "__main__":
-
-    KEY_BINDINGS = {
-        "increment": ["up"],
-        "decrement": ["down"],
-        "reset": ["left", "right"],
-        "new_objective": ["n"],
-        "exit": ["esc"],
-    }
-
-    manager = ObjectiveManager(KEY_BINDINGS)
-    manager.run()
+    Tracker().run()
