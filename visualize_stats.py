@@ -195,7 +195,8 @@ class SessionProgressPlot(BasePlot):
 
         ax.set_ylim(0, 100)
 
-        ax.legend()
+        if ax.get_legend_handles_labels()[0]:
+            ax.legend()
 
 
 # =========================
@@ -248,7 +249,8 @@ class RollingSuccessPlot(BasePlot):
 
         ax.set_ylim(0, 100)
 
-        ax.legend()
+        if ax.get_legend_handles_labels()[0]:
+            ax.legend()
 
 
 
