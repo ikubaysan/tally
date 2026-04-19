@@ -8,7 +8,7 @@ DB_FILE = "tally.db"
 
 
 # =========================
-# Load Data (SQL)
+# Load Data
 # =========================
 
 def load_data():
@@ -22,11 +22,8 @@ def load_data():
         s.id,
         a.result
     FROM attempts a
-    JOIN sessions s
-        ON a.session_id = s.id
-    JOIN objectives o
-        ON a.objective_id = o.id
-    WHERE LOWER(o.name) != 'default'
+    JOIN sessions s ON a.session_id = s.id
+    JOIN objectives o ON a.objective_id = o.id
     ORDER BY o.name, s.id
     """)
 
@@ -37,21 +34,21 @@ def load_data():
 
 
 # =========================
-# Structure Data
+# Structure
 # =========================
 
 def process_data(rows):
 
     data = defaultdict(lambda: defaultdict(list))
 
-    for obj_name, session_id, result in rows:
-        data[obj_name][session_id].append(result)
+    for name, sid, result in rows:
+        data[name][sid].append(result)
 
     return data
 
 
 # =========================
-# Overall Success Rate
+# Overall
 # =========================
 
 def compute_overall_rates(data):
@@ -59,118 +56,92 @@ def compute_overall_rates(data):
     names = []
     rates = []
 
-    for obj_name, sessions in data.items():
+    for name, sessions in data.items():
 
-        success = 0
         total = 0
+        success = 0
 
         for results in sessions.values():
-            success += results.count("success")
+            success += sum(results)
             total += len(results)
 
         if total == 0:
             continue
 
-        names.append(obj_name)
+        names.append(name)
         rates.append((success / total) * 100)
 
     return names, rates
 
 
 # =========================
-# Session Progress
+# Session trend
 # =========================
 
 def compute_session_rates(data):
 
-    output = {}
+    out = {}
 
-    for obj_name, sessions in data.items():
-
-        session_ids = sorted(sessions.keys())
+    for name, sessions in data.items():
 
         rates = []
 
-        for sid in session_ids:
+        for sid in sorted(sessions.keys()):
 
             results = sessions[sid]
 
-            total = len(results)
-            if total == 0:
+            if not results:
                 continue
 
-            success = results.count("success")
-
-            rates.append((success / total) * 100)
+            rates.append((sum(results) / len(results)) * 100)
 
         if rates:
-            output[obj_name] = rates
+            out[name] = rates
 
-    return output
+    return out
 
 
 # =========================
-# Plot 1: Overall
+# Plot
 # =========================
 
 def plot_overall(names, rates):
-
-    if not names:
-        print("No data available.")
-        return
 
     plt.figure()
 
     plt.bar(names, rates)
 
     plt.title("Success Rate per Objective")
-
-    plt.ylabel("Success Rate (%)")
+    plt.ylabel("Success %")
 
     plt.xticks(rotation=45)
-
     plt.ylim(0, 100)
 
     plt.tight_layout()
-
     plt.show()
 
 
-# =========================
-# Plot 2: Session Progress
-# =========================
-
-def plot_progress(session_progress):
-
-    if not session_progress:
-        print("No session data available.")
-        return
+def plot_progress(data):
 
     plt.figure()
-
     ax = plt.gca()
 
-    for obj_name, rates in session_progress.items():
+    for name, rates in data.items():
 
         x = list(range(1, len(rates) + 1))
 
-        plt.plot(x, rates, marker="o", label=obj_name)
+        plt.plot(x, rates, marker="o", label=name)
 
     plt.title("Success Rate by Session")
+    plt.xlabel("Session")
+    plt.ylabel("Success %")
 
-    plt.xlabel("Session Number")
-
-    plt.ylabel("Success Rate (%)")
-
-    plt.ylim(0, 100)
-
-    plt.legend()
-
-    # Force integer ticks (FIX)
     ax.xaxis.set_major_locator(MaxNLocator(integer=True))
 
-    plt.tight_layout()
+    plt.ylim(0, 100)
+    plt.legend()
 
+    plt.tight_layout()
     plt.show()
 
 
@@ -183,18 +154,16 @@ def main():
     rows = load_data()
 
     if not rows:
-        print("No data found.")
+        print("No data")
         return
 
     data = process_data(rows)
 
     names, rates = compute_overall_rates(data)
-
-    session_progress = compute_session_rates(data)
+    sessions = compute_session_rates(data)
 
     plot_overall(names, rates)
-
-    plot_progress(session_progress)
+    plot_progress(sessions)
 
 
 if __name__ == "__main__":

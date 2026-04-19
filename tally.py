@@ -39,7 +39,7 @@ class Database:
         )
         """)
 
-        # SESSIONS  🆕
+        # SESSIONS
         cur.execute("""
         CREATE TABLE IF NOT EXISTS sessions (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -51,14 +51,14 @@ class Database:
         )
         """)
 
-        # ATTEMPTS (updated)
+        # ATTEMPTS (INTEGER result)
         cur.execute("""
         CREATE TABLE IF NOT EXISTS attempts (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             objective_id INTEGER NOT NULL,
             session_id INTEGER NOT NULL,
             timestamp TEXT NOT NULL,
-            result TEXT NOT NULL,
+            result INTEGER NOT NULL,
             FOREIGN KEY(objective_id)
                 REFERENCES objectives(id)
                 ON DELETE CASCADE,
@@ -97,14 +97,12 @@ class Database:
         cur = self.conn.cursor()
 
         try:
-
             cur.execute("""
             INSERT INTO objectives (name)
             VALUES (?)
             """, (name,))
 
             self.conn.commit()
-
             return True
 
         except sqlite3.IntegrityError:
@@ -123,8 +121,6 @@ class Database:
 
         self.conn.commit()
 
-    # -------------------------
-    # SESSION creation (lazy)
     # -------------------------
 
     def create_session(self, objective_id):
@@ -148,12 +144,7 @@ class Database:
 
     # -------------------------
 
-    def log_attempt(
-        self,
-        objective_id,
-        session_id,
-        result
-    ):
+    def log_attempt(self, objective_id, session_id, result):
 
         cur = self.conn.cursor()
 
@@ -194,8 +185,6 @@ class Session:
         self.start_time = datetime.now()
 
         self.completed = False
-
-        # Created only on first attempt
         self.session_id = None
 
     # -------------------------
@@ -203,10 +192,7 @@ class Session:
     def _ensure_session(self):
 
         if self.session_id is None:
-
-            self.session_id = self.db.create_session(
-                self.objective_id
-            )
+            self.session_id = self.db.create_session(self.objective_id)
 
     # -------------------------
 
@@ -222,7 +208,7 @@ class Session:
         self.db.log_attempt(
             self.objective_id,
             self.session_id,
-            "success"
+            1   # SUCCESS
         )
 
         if self.successes >= self.target:
@@ -242,7 +228,7 @@ class Session:
         self.db.log_attempt(
             self.objective_id,
             self.session_id,
-            "failure"
+            0   # FAILURE
         )
 
     # -------------------------
@@ -275,11 +261,6 @@ class Tracker:
 
         self.session = None
 
-        self.key_bindings = {
-            "Success": ["up"],
-            "Failure": ["down"]
-        }
-
         self._register_hotkeys()
 
     # -------------------------
@@ -287,11 +268,10 @@ class Tracker:
     def print_bindings(self):
 
         print("Key Bindings:")
+        print("  Success         -> up")
+        print("  Failure         -> down")
 
-        for action, keys in self.key_bindings.items():
-            print(f"  {action:<15} -> {', '.join(keys)}")
-
-    # =========================
+    # -------------------------
 
     def choose_objective(self):
 
@@ -301,8 +281,10 @@ class Tracker:
 
             print("\nAvailable Objectives:\n")
 
+            width = len(str(len(objectives)))
+
             for idx, (_, name) in enumerate(objectives, start=1):
-                print(f"  {idx}. {name}")
+                print(f"  {idx:>{width}}. {name}")
 
             print("\nOptions:")
             print("  [number] Choose objective")
@@ -323,31 +305,16 @@ class Tracker:
 
                 target = self._ask_target()
 
-                self.session = Session(
-                    obj_id,
-                    name,
-                    target,
-                    self.db
-                )
+                self.session = Session(obj_id, name, target, self.db)
 
-                print(
-                    f"\nStarted: {name} "
-                    f"(target: {target})\n"
-                )
-
+                print(f"\nStarted: {name} (target: {target})\n")
                 return
 
             elif choice == "a":
-
                 self._add_objective()
 
             elif choice == "r":
-
                 self._remove_objective()
-
-            else:
-
-                print("Invalid choice.")
 
     # -------------------------
 
@@ -355,9 +322,7 @@ class Tracker:
 
         while True:
 
-            val = input(
-                "Enter target (default 10): "
-            ).strip()
+            val = input("Enter target (default 10): ").strip()
 
             if val == "":
                 return 10
@@ -366,13 +331,13 @@ class Tracker:
                 print("Must be positive integer.")
                 continue
 
-            target = int(val)
+            v = int(val)
 
-            if target <= 0:
+            if v <= 0:
                 print("Must be > 0.")
                 continue
 
-            return target
+            return v
 
     # -------------------------
 
@@ -380,19 +345,17 @@ class Tracker:
 
         while True:
 
-            name = input(
-                "Enter new objective name: "
-            ).strip()
+            name = input("Enter new objective name: ").strip()
 
             if not name:
-                print("Name cannot be empty.")
+                print("Cannot be empty.")
                 continue
 
             if self.db.add_objective(name):
-                print("✔ Objective added.")
+                print("✔ Added")
                 return
 
-            print("❌ Objective already exists.")
+            print("Already exists.")
 
     # -------------------------
 
@@ -404,37 +367,25 @@ class Tracker:
             print("Cannot remove last objective.")
             return
 
-        while True:
+        num = input("Enter number to remove: ").strip()
 
-            num = input(
-                "Enter number to remove: "
-            ).strip()
-
-            if not num.isdigit():
-                print("Invalid number.")
-                continue
-
-            num = int(num)
-
-            if not (1 <= num <= len(objectives)):
-                print("Out of range.")
-                continue
-
-            obj_id, name = objectives[num - 1]
-
-            confirm = input(
-                f"Delete '{name}'? (y/n): "
-            ).lower()
-
-            if confirm == "y":
-
-                self.db.remove_objective(obj_id)
-
-                print("✔ Objective removed.")
-
+        if not num.isdigit():
             return
 
-    # =========================
+        num = int(num)
+
+        if not (1 <= num <= len(objectives)):
+            return
+
+        obj_id, name = objectives[num - 1]
+
+        confirm = input(f"Delete '{name}'? (y/n): ")
+
+        if confirm == "y":
+            self.db.remove_objective(obj_id)
+            print("✔ Removed")
+
+    # -------------------------
 
     def show(self):
 
@@ -442,13 +393,13 @@ class Tracker:
 
         print(
             f"\rObjective: {s.name} | "
-            f"Successes: {s.successes}/{s.target} | "
-            f"Failures: {s.failures} | "
+            f"Success: {s.successes}/{s.target} | "
+            f"Fail: {s.failures} | "
             f"Time: {s.elapsed_str()}      ",
             end=""
         )
 
-    # =========================
+    # -------------------------
 
     def handle_completion(self):
 
@@ -459,19 +410,17 @@ class Tracker:
 
         self.locked = True
 
-        print("\n\n--- SESSION COMPLETE ---")
-
+        print("\n\n--- COMPLETE ---")
         print(f"Objective: {s.name}")
-        print(f"Target: {s.target}")
-        print(f"Successes: {s.successes}")
-        print(f"Failures: {s.failures}")
+        print(f"Success: {s.successes}")
+        print(f"Fail: {s.failures}")
         print(f"Time: {s.elapsed_str()}")
 
         self.choose_objective()
 
         self.locked = False
 
-    # =========================
+    # -------------------------
 
     def success(self):
 
@@ -481,9 +430,7 @@ class Tracker:
                 return
 
             self.session.success()
-
             self.show()
-
             self.handle_completion()
 
     def failure(self):
@@ -494,24 +441,21 @@ class Tracker:
                 return
 
             self.session.failure()
-
             self.show()
 
-    # =========================
+    # -------------------------
 
     def _register_hotkeys(self):
 
         keyboard.add_hotkey("up", self.success)
         keyboard.add_hotkey("down", self.failure)
 
-    # =========================
+    # -------------------------
 
     def run(self):
 
-        print("Objective Tracker Started\n")
-
+        print("Started\n")
         self.print_bindings()
-
         self.choose_objective()
 
         while True:
