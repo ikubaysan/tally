@@ -492,23 +492,14 @@ class PlotManager:
 
     def __init__(self):
 
-        self.fig = plt.figure()
-        self.fig.canvas.manager.set_window_title("Tally Visualizations")
-
         self.plots = [
             RecentSuccessPlot(ROLLING_WINDOW),
-
             OverallSuccessPlot(),
-
             RollingSuccessPlot(ROLLING_WINDOW),
-
             SessionProgressPlot(),
-
             RunSuccessProbabilityTimelinePlot(ROLLING_WINDOW),
-
             CurrentRunSurvivalByObjectivePlot(ROLLING_WINDOW),
         ]
-
 
         figsize = self._compute_figsize(len(self.plots))
 
