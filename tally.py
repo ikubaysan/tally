@@ -6,7 +6,6 @@ from WindowController import WindowController
 import time
 
 
-
 DB_FILE = "tally.db"
 WINDOW_TITLE_KEYWORDS = ["NPUB30769"]
 
@@ -25,10 +24,7 @@ class Database:
         )
 
         self.conn.execute("PRAGMA foreign_keys = ON")
-
         self._setup()
-
-    # -------------------------
 
     def _setup(self):
 
@@ -52,7 +48,6 @@ class Database:
         )
         """)
 
-        # Updated attempts schema
         cur.execute("""
         CREATE TABLE IF NOT EXISTS attempts (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -70,12 +65,8 @@ class Database:
         )
         """)
 
-        # Add column if DB already exists
         try:
-            cur.execute("""
-            ALTER TABLE attempts
-            ADD COLUMN end_time TEXT
-            """)
+            cur.execute("ALTER TABLE attempts ADD COLUMN end_time TEXT")
         except sqlite3.OperationalError:
             pass
 
@@ -85,8 +76,6 @@ class Database:
         """)
 
         self.conn.commit()
-
-    # -------------------------
 
     def get_objectives(self):
 
@@ -99,8 +88,6 @@ class Database:
         """)
 
         return cur.fetchall()
-
-    # -------------------------
 
     def add_objective(self, name):
 
@@ -118,8 +105,6 @@ class Database:
         except sqlite3.IntegrityError:
             return False
 
-    # -------------------------
-
     def remove_objective(self, obj_id):
 
         cur = self.conn.cursor()
@@ -131,17 +116,12 @@ class Database:
 
         self.conn.commit()
 
-    # -------------------------
-
     def create_session(self, objective_id):
 
         cur = self.conn.cursor()
 
         cur.execute("""
-        INSERT INTO sessions (
-            objective_id,
-            start_time
-        )
+        INSERT INTO sessions (objective_id, start_time)
         VALUES (?, ?)
         """, (
             objective_id,
@@ -149,19 +129,9 @@ class Database:
         ))
 
         self.conn.commit()
-
         return cur.lastrowid
 
-    # -------------------------
-
-    def log_attempt(
-        self,
-        objective_id,
-        session_id,
-        start_time,
-        end_time,
-        result
-    ):
+    def log_attempt(self, objective_id, session_id, start_time, end_time, result):
 
         cur = self.conn.cursor()
 
@@ -202,41 +172,29 @@ class Session:
         self.failures = 0
 
         self.start_time = datetime.now()
-
         self.completed = False
+
         self.session_id = None
-
-        # NEW: track attempt start time
         self.last_attempt_time = datetime.now()
-
-    # -------------------------
 
     def _ensure_session(self):
 
         if self.session_id is None:
             self.session_id = self.db.create_session(self.objective_id)
 
-    # -------------------------
-
     def _log_attempt(self, result):
 
         now = datetime.now()
 
-        start_time = self.last_attempt_time.isoformat()
-        end_time = now.isoformat()
-
         self.db.log_attempt(
             self.objective_id,
             self.session_id,
-            start_time,
-            end_time,
+            self.last_attempt_time.isoformat(),
+            now.isoformat(),
             result
         )
 
-        # reset timer for next attempt
         self.last_attempt_time = now
-
-    # -------------------------
 
     def success(self):
 
@@ -244,15 +202,11 @@ class Session:
             return
 
         self._ensure_session()
-
         self.successes += 1
-
         self._log_attempt(1)
 
         if self.successes >= self.target:
             self.completed = True
-
-    # -------------------------
 
     def failure(self):
 
@@ -260,12 +214,8 @@ class Session:
             return
 
         self._ensure_session()
-
         self.failures += 1
-
         self._log_attempt(0)
-
-    # -------------------------
 
     def elapsed_str(self):
 
@@ -273,11 +223,7 @@ class Session:
 
         total = int(delta.total_seconds())
 
-        h = total // 3600
-        m = (total % 3600) // 60
-        s = total % 60
-
-        return f"{h:02}:{m:02}:{s:02}"
+        return f"{total//3600:02}:{(total%3600)//60:02}:{total%60:02}"
 
 
 # =========================
@@ -287,6 +233,7 @@ class Session:
 class Tracker:
 
     def __init__(self):
+
         self.window_controller = WindowController(
             title_keywords=WINDOW_TITLE_KEYWORDS,
             hotkey=("ctrl", "r")
@@ -300,19 +247,39 @@ class Tracker:
         self.session = None
         self.last_selected = None
 
-        self._register_hotkeys()
+        self.up_hook = None
+        self.down_hook = None
+
+    # -------------------------
+
+    def enable_hotkeys(self):
+
+        self.up_hook = keyboard.add_hotkey("up", self.success)
+        self.down_hook = keyboard.add_hotkey("down", self.failure)
+
+    def disable_hotkeys(self):
+
+        if self.up_hook:
+            keyboard.remove_hotkey(self.up_hook)
+            self.up_hook = None
+
+        if self.down_hook:
+            keyboard.remove_hotkey(self.down_hook)
+            self.down_hook = None
 
     # -------------------------
 
     def print_bindings(self):
 
         print("Key Bindings:")
-        print("  Success         -> up")
-        print("  Failure         -> down")
+        print("  Success -> up")
+        print("  Failure -> down")
 
     # -------------------------
 
     def choose_objective(self):
+
+        self.disable_hotkeys()
 
         while True:
 
@@ -324,13 +291,6 @@ class Tracker:
 
             for idx, (_, name) in enumerate(objectives, start=1):
                 print(f"  {idx:>{width}}. {name}")
-
-            if self.last_selected is not None:
-
-                num, name = self.last_selected
-
-                print("\nPreviously Selected Objective:")
-                print(f"  {num}. {name}")
 
             print("\nOptions:")
             print("  [number] Choose objective")
@@ -344,21 +304,15 @@ class Tracker:
                 num = int(choice)
 
                 if not (1 <= num <= len(objectives)):
-                    print("Invalid number.")
                     continue
 
                 obj_id, name = objectives[num - 1]
 
-                self.last_selected = (num, name)
-
                 target = self._ask_target()
 
-                self.session = Session(
-                    obj_id,
-                    name,
-                    target,
-                    self.db
-                )
+                self.session = Session(obj_id, name, target, self.db)
+
+                self.enable_hotkeys()
 
                 print(f"\nStarted: {name} (target: {target})\n")
                 return
@@ -373,70 +327,18 @@ class Tracker:
 
     def _ask_target(self):
 
-        while True:
+        val = input("Enter target (default 10): ").strip()
 
-            val = input("Enter target (default 10): ").strip()
-
-            if val == "":
-                return 10
-
-            if not val.isdigit():
-                print("Must be positive integer.")
-                continue
-
-            v = int(val)
-
-            if v <= 0:
-                print("Must be > 0.")
-                continue
-
-            return v
+        return int(val) if val.isdigit() else 10
 
     # -------------------------
 
     def _add_objective(self):
 
-        while True:
+        name = input("Enter new objective name: ").strip()
 
-            name = input("Enter new objective name: ").strip()
-
-            if not name:
-                print("Cannot be empty.")
-                continue
-
-            if self.db.add_objective(name):
-                print("✔ Added")
-                return
-
-            print("Already exists.")
-
-    # -------------------------
-
-    def _remove_objective(self):
-
-        objectives = self.db.get_objectives()
-
-        if len(objectives) <= 1:
-            print("Cannot remove last objective.")
-            return
-
-        num = input("Enter number to remove: ").strip()
-
-        if not num.isdigit():
-            return
-
-        num = int(num)
-
-        if not (1 <= num <= len(objectives)):
-            return
-
-        obj_id, name = objectives[num - 1]
-
-        confirm = input(f"Delete '{name}'? (y/n): ")
-
-        if confirm == "y":
-            self.db.remove_objective(obj_id)
-            print("✔ Removed")
+        if name:
+            self.db.add_objective(name)
 
     # -------------------------
 
@@ -448,7 +350,7 @@ class Tracker:
             f"\rObjective: {s.name} | "
             f"Success: {s.successes}/{s.target} | "
             f"Fail: {s.failures} | "
-            f"Time: {s.elapsed_str()}      ",
+            f"Time: {s.elapsed_str()}",
             end=""
         )
 
@@ -456,19 +358,17 @@ class Tracker:
 
     def handle_completion(self):
 
-        s = self.session
-
-        if not s.completed:
+        if not self.session.completed:
             return
 
         self.locked = True
 
         print("\n\n--- COMPLETE ---")
-        print(f"Objective: {s.name}")
-        print(f"Success: {s.successes}")
-        print(f"Fail: {s.failures}")
-        print(f"Time: {s.elapsed_str()}")
+        print(f"Objective: {self.session.name}")
+        print(f"Success: {self.session.successes}")
+        print(f"Fail: {self.session.failures}")
 
+        self.disable_hotkeys()
         self.choose_objective()
 
         self.locked = False
@@ -479,15 +379,13 @@ class Tracker:
 
         with self.lock:
 
-            if self.locked:
+            if self.locked or self.session is None:
                 return
 
             self.session.success()
             self.show()
 
-            # ❗ send hotkey ONLY if not final completion trigger
             if not self.session.completed:
-                print("\nSending hotkey to target application because of success event, and session is not yet completed.")
                 self.window_controller.send_hotkey()
 
             self.handle_completion()
@@ -496,28 +394,19 @@ class Tracker:
 
         with self.lock:
 
-            if self.locked:
+            if self.locked or self.session is None:
                 return
 
             self.session.failure()
             self.show()
 
-            print("\nSending hotkey to target application because of failure event.")
             self.window_controller.send_hotkey()
-
-    # -------------------------
-
-    def _register_hotkeys(self):
-
-        keyboard.add_hotkey("up", self.success)
-        keyboard.add_hotkey("down", self.failure)
 
     # -------------------------
 
     def run(self):
 
         print("Started\n")
-
         self.print_bindings()
         self.choose_objective()
 
