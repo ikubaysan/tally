@@ -1,1 +1,5 @@
 matplotlib
+pywin32
+pywinauto
+pyautogui
+keyboard

@@ -68,12 +68,14 @@ class BasePlot:
 
 
 # =========================
-# Overall Success Plot
+# Overall Success (ALL TIME)
 # =========================
 
 class OverallSuccessPlot(BasePlot):
 
     def update(self, ax, data):
+
+        ax.clear()
 
         names = []
         rates = []
@@ -93,11 +95,9 @@ class OverallSuccessPlot(BasePlot):
             names.append(name)
             rates.append((success / total) * 100)
 
-        ax.clear()
-
         ax.bar(names, rates)
 
-        ax.set_title("Success Rate per Objective")
+        ax.set_title("Overall Success Rate per Objective")
         ax.set_ylabel("Success %")
         ax.set_ylim(0, 100)
 
@@ -105,7 +105,56 @@ class OverallSuccessPlot(BasePlot):
 
 
 # =========================
-# Session Progress Plot
+# Recent Success (NEW)
+# =========================
+
+class RecentSuccessPlot(BasePlot):
+
+    def __init__(self, window):
+        self.window = window
+
+    def update(self, ax, data):
+
+        ax.clear()
+
+        names = []
+        rates = []
+
+        for name, sessions in data.items():
+
+            all_results = []
+
+            for sid in sorted(sessions.keys()):
+                all_results.extend(sessions[sid])
+
+            if not all_results:
+                continue
+
+            recent = all_results[-self.window:]
+
+            if not recent:
+                continue
+
+            rate = (sum(recent) / len(recent)) * 100
+
+            names.append(name)
+            rates.append(rate)
+
+        ax.bar(names, rates)
+
+        ax.set_title(
+            f"Recent Success Rate "
+            f"(last {self.window} attempts)"
+        )
+
+        ax.set_ylabel("Success %")
+        ax.set_ylim(0, 100)
+
+        ax.tick_params(axis='x', rotation=45)
+
+
+# =========================
+# Session Progress
 # =========================
 
 class SessionProgressPlot(BasePlot):
@@ -134,12 +183,7 @@ class SessionProgressPlot(BasePlot):
 
             x = list(range(1, len(rates) + 1))
 
-            ax.plot(
-                x,
-                rates,
-                marker="o",
-                label=name
-            )
+            ax.plot(x, rates, marker="o", label=name)
 
         ax.set_title("Success Rate by Session")
         ax.set_xlabel("Session")
@@ -155,13 +199,13 @@ class SessionProgressPlot(BasePlot):
 
 
 # =========================
-# Rolling Success Plot (NEW)
+# Rolling Success
 # =========================
 
 class RollingSuccessPlot(BasePlot):
 
-    def __init__(self, window_size):
-        self.window_size = window_size
+    def __init__(self, window):
+        self.window = window
 
     def update(self, ax, data):
 
@@ -172,49 +216,31 @@ class RollingSuccessPlot(BasePlot):
             all_results = []
 
             for sid in sorted(sessions.keys()):
-                all_results.extend(
-                    sessions[sid]
-                )
+                all_results.extend(sessions[sid])
 
-            if len(all_results) < self.window_size:
+            if len(all_results) < self.window:
                 continue
 
-            rolling_rates = []
-
-            window = deque(
-                maxlen=self.window_size
-            )
+            window = deque(maxlen=self.window)
+            rolling = []
 
             for r in all_results:
-
                 window.append(r)
 
-                if len(window) == self.window_size:
+                if len(window) == self.window:
+                    rolling.append(
+                        sum(window) / self.window * 100
+                    )
 
-                    rate = (
-                        sum(window)
-                        / self.window_size
-                    ) * 100
-
-                    rolling_rates.append(rate)
-
-            x = list(
-                range(
-                    self.window_size,
-                    self.window_size
-                    + len(rolling_rates)
-                )
+            x = range(
+                self.window,
+                self.window + len(rolling)
             )
 
-            ax.plot(
-                x,
-                rolling_rates,
-                label=name
-            )
+            ax.plot(x, rolling, label=name)
 
         ax.set_title(
-            f"Rolling Success Rate "
-            f"(MA of latest {self.window_size} attempts)"
+            f"Rolling Success Rate (MA {self.window})"
         )
 
         ax.set_xlabel("Attempt")
@@ -234,16 +260,16 @@ class PlotManager:
     def __init__(self):
 
         self.fig = plt.figure()
+        self.fig.canvas.manager.set_window_title("Tally Visualizations")
 
         self.plots = [
+            RecentSuccessPlot(ROLLING_WINDOW),
 
             OverallSuccessPlot(),
 
-            SessionProgressPlot(),
+            RollingSuccessPlot(ROLLING_WINDOW),
 
-            RollingSuccessPlot(
-                ROLLING_WINDOW
-            )
+            SessionProgressPlot(),
 
         ]
 
@@ -251,25 +277,15 @@ class PlotManager:
 
         count = len(self.plots)
 
-        cols = math.ceil(
-            math.sqrt(count)
-        )
-
-        rows = math.ceil(
-            count / cols
-        )
+        cols = math.ceil(math.sqrt(count))
+        rows = math.ceil(count / cols)
 
         axes = []
 
         for i in range(count):
-
-            ax = self.fig.add_subplot(
-                rows,
-                cols,
-                i + 1
+            axes.append(
+                self.fig.add_subplot(rows, cols, i + 1)
             )
-
-            axes.append(ax)
 
         return axes
 
@@ -279,68 +295,46 @@ class PlotManager:
 
         axes = self._build_axes()
 
-        for ax, plot in zip(
-            axes,
-            self.plots
-        ):
-
+        for ax, plot in zip(axes, self.plots):
             plot.update(ax, data)
 
         self.fig.tight_layout()
-
         self.fig.canvas.draw_idle()
 
 
 # =========================
-# Visualization App
+# App
 # =========================
 
 class VisualizationApp:
 
     def __init__(self):
 
-        self.loader = DatabaseLoader(
-            DB_FILE
-        )
-
+        self.loader = DatabaseLoader(DB_FILE)
         self.plot_manager = PlotManager()
-
         self.last_mtime = None
 
-    def check_for_updates(self, event=None):
+    def check_for_updates(self):
 
         try:
 
-            current_mtime = os.path.getmtime(
-                DB_FILE
-            )
+            mtime = os.path.getmtime(DB_FILE)
 
-            now = datetime.now().strftime(
-                "%H:%M:%S"
-            )
-
-            print(
-                f"[{now}] Checking DB file..."
-            )
+            now = datetime.now().strftime("%H:%M:%S")
+            print(f"[{now}] Checking DB file...")
 
             if self.last_mtime is None:
-
-                self.last_mtime = current_mtime
+                self.last_mtime = mtime
                 self.update_plots()
                 return
 
-            if current_mtime != self.last_mtime:
+            if mtime != self.last_mtime:
 
-                print(
-                    f"[{now}] Change detected."
-                )
-
-                self.last_mtime = current_mtime
-
+                print(f"[{now}] Change detected.")
+                self.last_mtime = mtime
                 self.update_plots()
 
         except FileNotFoundError:
-
             print("Database file not found.")
 
     def update_plots(self):
@@ -355,21 +349,13 @@ class VisualizationApp:
 
         self.plot_manager.update(data)
 
-        now = datetime.now().strftime(
-            "%H:%M:%S"
-        )
-
-        print(
-            f"[{now}] Charts updated."
-        )
+        now = datetime.now().strftime("%H:%M:%S")
+        print(f"[{now}] Charts updated.")
 
     def run(self):
 
         print("Visualization started.")
-        print(
-            f"Checking every "
-            f"{CHECK_INTERVAL_SECONDS} seconds.\n"
-        )
+        print(f"Checking every {CHECK_INTERVAL_SECONDS} seconds.\n")
 
         self.check_for_updates()
 
@@ -377,10 +363,7 @@ class VisualizationApp:
             interval=CHECK_INTERVAL_SECONDS * 1000
         )
 
-        timer.add_callback(
-            self.check_for_updates
-        )
-
+        timer.add_callback(self.check_for_updates)
         timer.start()
 
         plt.show()
@@ -389,6 +372,4 @@ class VisualizationApp:
 # =========================
 
 if __name__ == "__main__":
-
-    app = VisualizationApp()
-    app.run()
+    VisualizationApp().run()

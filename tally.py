@@ -2,10 +2,13 @@ import keyboard
 import sqlite3
 import threading
 from datetime import datetime
+from WindowController import WindowController
 import time
 
 
+
 DB_FILE = "tally.db"
+WINDOW_TITLE_KEYWORDS = ["NPUB30769"]
 
 
 # =========================
@@ -284,6 +287,10 @@ class Session:
 class Tracker:
 
     def __init__(self):
+        self.window_controller = WindowController(
+            title_keywords=WINDOW_TITLE_KEYWORDS,
+            hotkey=("ctrl", "r")
+        )
 
         self.db = Database()
 
@@ -477,6 +484,12 @@ class Tracker:
 
             self.session.success()
             self.show()
+
+            # ❗ send hotkey ONLY if not final completion trigger
+            if not self.session.completed:
+                print("\nSending hotkey to target application because of success event, and session is not yet completed.")
+                self.window_controller.send_hotkey()
+
             self.handle_completion()
 
     def failure(self):
@@ -488,6 +501,9 @@ class Tracker:
 
             self.session.failure()
             self.show()
+
+            print("\nSending hotkey to target application because of failure event.")
+            self.window_controller.send_hotkey()
 
     # -------------------------
 
