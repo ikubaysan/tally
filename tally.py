@@ -385,7 +385,7 @@ class Tracker:
 
             if self.last_completed_objective:
                 name, obj_id = self.last_completed_objective
-                print(f"\n  ✔ Last Completed: {obj_id + 1}. {name}\n")
+                print(f"\n  ✔ Last Completed: {obj_id - 1}. {name}\n")
 
             self.print_menu()
 
