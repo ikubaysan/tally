@@ -4,10 +4,150 @@ import threading
 from datetime import datetime
 from WindowController import WindowController
 import time
+import json
+import pygame
 
 
 DB_FILE = "tally.db"
 WINDOW_TITLE_KEYWORDS = ["NPUB30769"]
+INPUT_CONFIG_FILE = "input_bindings.json"
+
+
+# =========================
+# Input Manager
+# =========================
+
+class InputManager:
+
+    def __init__(self):
+
+        pygame.init()
+        pygame.joystick.init()
+
+        self.config = {
+            "keyboard": {
+                "success": "up",
+                "failure": "down"
+            },
+            "controllers": {}
+        }
+
+        self.keyboard_hooks = []
+        self.running = True
+
+        self.load()
+
+    # -------------------------
+
+    def load(self):
+
+        try:
+            with open(INPUT_CONFIG_FILE, "r") as f:
+                self.config = json.load(f)
+        except FileNotFoundError:
+            pass
+
+    def save(self):
+
+        with open(INPUT_CONFIG_FILE, "w") as f:
+            json.dump(self.config, f, indent=4)
+
+    # -------------------------
+
+    def bind_keyboard(self, tracker):
+
+        self.keyboard_hooks.append(
+            keyboard.add_hotkey(
+                self.config["keyboard"]["success"],
+                tracker.success
+            )
+        )
+
+        self.keyboard_hooks.append(
+            keyboard.add_hotkey(
+                self.config["keyboard"]["failure"],
+                tracker.failure
+            )
+        )
+
+    def unbind_keyboard(self):
+
+        for h in self.keyboard_hooks:
+            keyboard.remove_hotkey(h)
+
+        self.keyboard_hooks.clear()
+
+    # -------------------------
+
+    def _refresh_joysticks(self):
+
+        pygame.joystick.quit()
+        pygame.joystick.init()
+
+        print("\nDetected controllers:")
+
+        for i in range(pygame.joystick.get_count()):
+            js = pygame.joystick.Joystick(i)
+            js.init()
+            print(f"  [{i}] {js.get_name()} (instance_id={js.get_instance_id()})")
+
+    # -------------------------
+
+    def listen_for_controller_bind(self):
+
+        print("\n--- Controller Binding Mode ---")
+
+        self._refresh_joysticks()
+
+        print("\nPress SUCCESS button (ESC to cancel)...")
+        success = self._wait_for_button()
+        if success is None:
+            return False
+
+        print("Press FAILURE button (ESC to cancel)...")
+        failure = self._wait_for_button()
+        if failure is None:
+            return False
+
+        joy_id = str(success["instance_id"])
+
+        self.config["controllers"][joy_id] = {
+            "name": success["name"],
+            "success": success["button"],
+            "failure": failure["button"]
+        }
+
+        self.save()
+
+        print(f"\n✔ Bound controller: {success['name']}")
+        return True
+
+    # -------------------------
+
+    def _wait_for_button(self):
+
+        while True:
+
+            pygame.event.pump()
+
+            for event in pygame.event.get():
+
+                if event.type == pygame.KEYDOWN and event.key == pygame.K_ESCAPE:
+                    return None
+
+                if event.type == pygame.JOYBUTTONDOWN:
+
+                    joy = pygame.joystick.Joystick(event.joy)
+                    joy.init()
+
+                    print(f"Detected button {event.button} on {joy.get_name()}")
+
+                    return {
+                        "instance_id": joy.get_instance_id(),
+                        "joy_index": event.joy,
+                        "name": joy.get_name(),
+                        "button": event.button
+                    }
 
 
 # =========================
@@ -18,11 +158,7 @@ class Database:
 
     def __init__(self):
 
-        self.conn = sqlite3.connect(
-            DB_FILE,
-            check_same_thread=False
-        )
-
+        self.conn = sqlite3.connect(DB_FILE, check_same_thread=False)
         self.conn.execute("PRAGMA foreign_keys = ON")
         self._setup()
 
@@ -65,11 +201,6 @@ class Database:
         )
         """)
 
-        try:
-            cur.execute("ALTER TABLE attempts ADD COLUMN end_time TEXT")
-        except sqlite3.OperationalError:
-            pass
-
         cur.execute("""
         INSERT OR IGNORE INTO objectives (name)
         VALUES ('default')
@@ -80,40 +211,21 @@ class Database:
     def get_objectives(self):
 
         cur = self.conn.cursor()
-
-        cur.execute("""
-        SELECT id, name
-        FROM objectives
-        ORDER BY name COLLATE NOCASE
-        """)
-
+        cur.execute("SELECT id, name FROM objectives ORDER BY name COLLATE NOCASE")
         return cur.fetchall()
 
     def add_objective(self, name):
 
-        cur = self.conn.cursor()
-
         try:
-            cur.execute("""
-            INSERT INTO objectives (name)
-            VALUES (?)
-            """, (name,))
-
+            self.conn.execute("INSERT INTO objectives (name) VALUES (?)", (name,))
             self.conn.commit()
             return True
-
         except sqlite3.IntegrityError:
             return False
 
     def remove_objective(self, obj_id):
 
-        cur = self.conn.cursor()
-
-        cur.execute("""
-        DELETE FROM objectives
-        WHERE id = ?
-        """, (obj_id,))
-
+        self.conn.execute("DELETE FROM objectives WHERE id = ?", (obj_id,))
         self.conn.commit()
 
     def create_session(self, objective_id):
@@ -123,34 +235,18 @@ class Database:
         cur.execute("""
         INSERT INTO sessions (objective_id, start_time)
         VALUES (?, ?)
-        """, (
-            objective_id,
-            datetime.now().isoformat()
-        ))
+        """, (objective_id, datetime.now().isoformat()))
 
         self.conn.commit()
         return cur.lastrowid
 
     def log_attempt(self, objective_id, session_id, start_time, end_time, result):
 
-        cur = self.conn.cursor()
-
-        cur.execute("""
+        self.conn.execute("""
         INSERT INTO attempts (
-            objective_id,
-            session_id,
-            start_time,
-            end_time,
-            result
-        )
-        VALUES (?, ?, ?, ?, ?)
-        """, (
-            objective_id,
-            session_id,
-            start_time,
-            end_time,
-            result
-        ))
+            objective_id, session_id, start_time, end_time, result
+        ) VALUES (?, ?, ?, ?, ?)
+        """, (objective_id, session_id, start_time, end_time, result))
 
         self.conn.commit()
 
@@ -220,10 +316,8 @@ class Session:
     def elapsed_str(self):
 
         delta = datetime.now() - self.start_time
-
-        total = int(delta.total_seconds())
-
-        return f"{total//3600:02}:{(total%3600)//60:02}:{total%60:02}"
+        t = int(delta.total_seconds())
+        return f"{t//3600:02}:{(t%3600)//60:02}:{t%60:02}"
 
 
 # =========================
@@ -240,105 +334,85 @@ class Tracker:
         )
 
         self.db = Database()
+        self.input_manager = InputManager()
 
         self.lock = threading.Lock()
         self.locked = False
 
         self.session = None
-        self.last_selected = None
+        self.keyboard_enabled = False
 
-        self.up_hook = None
-        self.down_hook = None
-
-    # -------------------------
-
-    def enable_hotkeys(self):
-
-        self.up_hook = keyboard.add_hotkey("up", self.success)
-        self.down_hook = keyboard.add_hotkey("down", self.failure)
-
-    def disable_hotkeys(self):
-
-        if self.up_hook:
-            keyboard.remove_hotkey(self.up_hook)
-            self.up_hook = None
-
-        if self.down_hook:
-            keyboard.remove_hotkey(self.down_hook)
-            self.down_hook = None
+        self.last_completed_objective = None
 
     # -------------------------
 
-    def print_bindings(self):
+    def enable_inputs(self):
 
-        print("Key Bindings:")
-        print("  Success -> up")
-        print("  Failure -> down")
+        self.input_manager.bind_keyboard(self)
+        self.keyboard_enabled = True
+
+    def disable_inputs(self):
+
+        self.input_manager.unbind_keyboard()
+        self.keyboard_enabled = False
+
+    # -------------------------
+
+    def print_menu(self):
+
+        print("\nOptions:")
+        print("  [number] Choose objective")
+        print("  A        Add objective")
+        print("  R        Remove objective")
+        print("  C        Bind controller")
 
     # -------------------------
 
     def choose_objective(self):
 
-        self.disable_hotkeys()
+        self.disable_inputs()
 
         while True:
 
-            objectives = self.db.get_objectives()
+            objs = self.db.get_objectives()
 
             print("\nAvailable Objectives:\n")
 
-            width = len(str(len(objectives)))
+            width = len(str(len(objs)))  # auto-align based on list size
 
-            for idx, (_, name) in enumerate(objectives, start=1):
-                print(f"  {idx:>{width}}. {name}")
+            for i, (_, name) in enumerate(objs, 1):
+                print(f"  {i:>{width}}. {name}")
 
-            print("\nOptions:")
-            print("  [number] Choose objective")
-            print("  A        Add objective")
-            print("  R        Remove objective")
+            if self.last_completed_objective:
+                name, obj_id = self.last_completed_objective
+                print(f"\n  ✔ Last Completed: {name} (ID {obj_id})\n")
+
+            self.print_menu()
 
             choice = input("\nChoice: ").strip().lower()
 
             if choice.isdigit():
 
-                num = int(choice)
+                idx = int(choice)
 
-                if not (1 <= num <= len(objectives)):
-                    continue
+                if 1 <= idx <= len(objs):
 
-                obj_id, name = objectives[num - 1]
+                    obj_id, name = objs[idx - 1]
+                    target = 10
 
-                target = self._ask_target()
+                    self.session = Session(obj_id, name, target, self.db)
 
-                self.session = Session(obj_id, name, target, self.db)
+                    self.enable_inputs()
 
-                self.enable_hotkeys()
+                    print(f"\nStarted: {name}")
+                    return
 
-                print(f"\nStarted: {name} (target: {target})\n")
-                return
+            elif choice == "c":
+                self.input_manager.listen_for_controller_bind()
 
             elif choice == "a":
-                self._add_objective()
-
-            elif choice == "r":
-                self._remove_objective()
-
-    # -------------------------
-
-    def _ask_target(self):
-
-        val = input("Enter target (default 10): ").strip()
-
-        return int(val) if val.isdigit() else 10
-
-    # -------------------------
-
-    def _add_objective(self):
-
-        name = input("Enter new objective name: ").strip()
-
-        if name:
-            self.db.add_objective(name)
+                name = input("Name: ")
+                self.db.add_objective(name)
 
     # -------------------------
 
@@ -347,10 +421,10 @@ class Tracker:
         s = self.session
 
         print(
-            f"\rObjective: {s.name} | "
-            f"Success: {s.successes}/{s.target} | "
-            f"Fail: {s.failures} | "
-            f"Time: {s.elapsed_str()}",
+            f"\r{s.name} | "
+            f"{s.successes}/{s.target} | "
+            f"fail {s.failures} | "
+            f"{s.elapsed_str()}",
             end=""
         )
 
@@ -361,17 +435,13 @@ class Tracker:
         if not self.session.completed:
             return
 
-        self.locked = True
+        self.last_completed_objective = (self.session.name, self.session.objective_id)
 
         print("\n\n--- COMPLETE ---")
-        print(f"Objective: {self.session.name}")
-        print(f"Success: {self.session.successes}")
-        print(f"Fail: {self.session.failures}")
+        print(self.session.name)
 
-        self.disable_hotkeys()
+        self.disable_inputs()
         self.choose_objective()
-
-        self.locked = False
 
     # -------------------------
 
@@ -379,7 +449,7 @@ class Tracker:
 
         with self.lock:
 
-            if self.locked or self.session is None:
+            if self.session is None or self.locked:
                 return
 
             self.session.success()
@@ -394,7 +464,7 @@ class Tracker:
 
         with self.lock:
 
-            if self.locked or self.session is None:
+            if self.session is None or self.locked:
                 return
 
             self.session.failure()
@@ -404,10 +474,51 @@ class Tracker:
 
     # -------------------------
 
+    def _poll_controllers(self):
+
+        while True:
+
+            if self.session is None:
+                time.sleep(0.1)
+                continue
+
+            pygame.event.pump()
+
+            for i in range(pygame.joystick.get_count()):
+
+                js = pygame.joystick.Joystick(i)
+                js.init()
+
+                cid = str(js.get_instance_id())
+
+                if cid not in self.input_manager.config["controllers"]:
+                    continue
+
+                cfg = self.input_manager.config["controllers"][cid]
+
+                for b in range(js.get_numbuttons()):
+
+                    if js.get_button(b):
+
+                        if b == cfg["success"]:
+                            self.success()
+
+                        elif b == cfg["failure"]:
+                            self.failure()
+
+            time.sleep(0.01)
+
+    # -------------------------
+
     def run(self):
 
-        print("Started\n")
-        self.print_bindings()
+        print("Started")
+
+        threading.Thread(
+            target=self._poll_controllers,
+            daemon=True
+        ).start()
+
         self.choose_objective()
 
         while True:

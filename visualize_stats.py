@@ -7,15 +7,15 @@ import os
 import math
 
 
+
 # =========================
 # Config
 # =========================
 
 DB_FILE = "tally.db"
-
 CHECK_INTERVAL_SECONDS = 10
 ROLLING_WINDOW = 20
-
+#plt.style.use("dark_background")
 
 # =========================
 # Data Loader
@@ -251,6 +251,210 @@ class RollingSuccessPlot(BasePlot):
         ax.legend()
 
 
+
+# ============================================================
+# CUMULATIVE SUCCESS PROBABILITY ACROSS OBJECTIVES
+# ------------------------------------------------------------
+#
+# Purpose:
+# --------
+# This visualization estimates the probability of completing
+# ALL objectives perfectly in sequence (no failures allowed),
+# based on recent performance.
+#
+# It answers the question:
+#
+#   "Based on my recent attempts, what is the chance that I
+#    would succeed at every objective once, with zero mistakes?"
+#
+#
+# Core Concept:
+# -------------
+# Each objective has a rolling success rate calculated from
+# its most recent N attempts (currently N = 20).
+#
+# Example:
+#
+#   Objective A (last 20 attempts):
+#       18 successes, 2 failures → 90% success rate
+#
+#   Objective B (last 20 attempts):
+#       15 successes, 5 failures → 75% success rate
+#
+#   Objective C (last 20 attempts):
+#       10 successes, 10 failures → 50% success rate
+#
+# These per-objective probabilities are multiplied together
+# to produce the cumulative probability of a perfect run:
+#
+#   P(total) = P(A) × P(B) × P(C)
+#
+# Example:
+#
+#   P(total) = 0.90 × 0.75 × 0.50
+#            = 0.3375
+#            = 33.75%
+#
+#
+# Rolling Window Behavior:
+# ------------------------
+# Only the most recent N attempts (currently 20) are used
+# for each objective.
+#
+# As new attempts occur:
+#
+#   - New attempts are added
+#   - Old attempts fall out of the window
+#   - Success rates update dynamically
+#   - The cumulative probability updates accordingly
+#
+# This ensures the visualization reflects CURRENT performance,
+# not historical lifetime averages.
+#
+#
+# Objective Ordering:
+# -------------------
+# Objectives are processed in alphabetical order.
+#
+# This defines the assumed order of execution when computing
+# the cumulative probability.
+#
+# For example:
+#
+#   A → B → C → D
+#
+# The cumulative probability decreases step-by-step as each
+# objective is added to the sequence.
+#
+#
+# Important Interpretation:
+# -------------------------
+# This represents the probability of a PERFECT RUN,
+# meaning:
+#
+#   - Each objective is attempted exactly once
+#   - No retries are allowed
+#   - Any failure ends the run
+#
+# It does NOT represent:
+#
+#   - The probability of eventual success with retries
+#   - The probability of finishing after multiple failures
+#
+#
+# Mathematical Assumption:
+# ------------------------
+# This model assumes independence between objectives,
+# meaning the probability of success at one objective
+# does not directly affect another.
+#
+# While not perfectly true in practice, this provides a
+# useful and intuitive estimate of full-run reliability.
+#
+#
+# Why This Is Useful:
+# -------------------
+# The cumulative probability drops as more objectives
+# are included, highlighting weak points in the sequence.
+#
+# If one objective has a low success rate, it will cause
+# a sharp drop in the cumulative probability, making it
+# easy to identify where improvement is needed.
+#
+#
+# Summary:
+# --------
+# This visualization shows:
+#
+#   "Based on my last 20 attempts per objective,
+#    what is the chance I would clear ALL objectives
+#    perfectly in one uninterrupted run?"
+#
+# ============================================================
+class CumulativeSuccessProbabilityPlot(BasePlot):
+
+    def __init__(self, window):
+        self.window = window
+
+    def update(self, ax, data):
+
+        ax.clear()
+
+        # alphabetical order (IMPORTANT requirement)
+        objective_names = sorted(data.keys())
+
+        print("\n=== Objective Execution Order (Alphabetical) ===")
+        for i, name in enumerate(objective_names, 1):
+            print(f"{i}. {name}")
+        print("================================================\n")
+
+        # build per-objective rolling windows over time
+        history = defaultdict(list)
+
+        max_steps = 0
+
+        for name in objective_names:
+
+            sessions = data[name]
+
+            all_results = []
+
+            for sid in sorted(sessions.keys()):
+                all_results.extend(sessions[sid])
+
+            window = deque(maxlen=self.window)
+            rolling = []
+
+            for r in all_results:
+                window.append(r)
+
+                if len(window) == self.window:
+                    rolling_rate = sum(window) / self.window
+                else:
+                    rolling_rate = sum(window) / len(window) if window else 0
+
+                rolling.append(rolling_rate)
+
+            history[name] = rolling
+            max_steps = max(max_steps, len(rolling))
+
+        # compute compounded probability over time
+        x_vals = []
+        y_vals = []
+
+        for t in range(max_steps):
+
+            prob = 1.0
+
+            for name in objective_names:
+
+                series = history[name]
+
+                if not series:
+                    continue
+
+                # clamp to last known value
+                idx = min(t, len(series) - 1)
+
+                prob *= series[idx]
+
+            x_vals.append(t)
+            y_vals.append(prob * 100)
+
+        ax.plot(x_vals, y_vals)
+
+        ax.set_title(
+            f"Cumulative Success Probability Across Objectives\n"
+            f"(Alphabetical Order, Rolling Window = {self.window})"
+        )
+
+        ax.set_xlabel("Attempt Step (Global)")
+        ax.set_ylabel("Success Probability %")
+
+        ax.set_ylim(0, 100)
+
+
+
 # =========================
 # Plot Manager
 # =========================
@@ -270,6 +474,8 @@ class PlotManager:
             RollingSuccessPlot(ROLLING_WINDOW),
 
             SessionProgressPlot(),
+
+            CumulativeSuccessProbabilityPlot(ROLLING_WINDOW),
 
         ]
 
