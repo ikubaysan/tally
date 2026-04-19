@@ -252,126 +252,52 @@ class RollingSuccessPlot(BasePlot):
 
 
 
-# ============================================================
-# CUMULATIVE SUCCESS PROBABILITY ACROSS OBJECTIVES
-# ------------------------------------------------------------
-#
-# Purpose:
-# --------
-# This visualization estimates the probability of completing
-# ALL objectives perfectly in sequence (no failures allowed),
-# based on recent performance.
-#
-# It answers the question:
-#
-#   "Based on my recent attempts, what is the chance that I
-#    would succeed at every objective once, with zero mistakes?"
-#
-#
-# Core Concept:
-# -------------
-# Each objective has a rolling success rate calculated from
-# its most recent N attempts (currently N = 20).
-#
-# Example:
-#
-#   Objective A (last 20 attempts):
-#       18 successes, 2 failures → 90% success rate
-#
-#   Objective B (last 20 attempts):
-#       15 successes, 5 failures → 75% success rate
-#
-#   Objective C (last 20 attempts):
-#       10 successes, 10 failures → 50% success rate
-#
-# These per-objective probabilities are multiplied together
-# to produce the cumulative probability of a perfect run:
-#
-#   P(total) = P(A) × P(B) × P(C)
-#
-# Example:
-#
-#   P(total) = 0.90 × 0.75 × 0.50
-#            = 0.3375
-#            = 33.75%
-#
-#
-# Rolling Window Behavior:
-# ------------------------
-# Only the most recent N attempts (currently 20) are used
-# for each objective.
-#
-# As new attempts occur:
-#
-#   - New attempts are added
-#   - Old attempts fall out of the window
-#   - Success rates update dynamically
-#   - The cumulative probability updates accordingly
-#
-# This ensures the visualization reflects CURRENT performance,
-# not historical lifetime averages.
-#
-#
-# Objective Ordering:
-# -------------------
-# Objectives are processed in alphabetical order.
-#
-# This defines the assumed order of execution when computing
-# the cumulative probability.
-#
-# For example:
-#
-#   A → B → C → D
-#
-# The cumulative probability decreases step-by-step as each
-# objective is added to the sequence.
-#
-#
-# Important Interpretation:
-# -------------------------
-# This represents the probability of a PERFECT RUN,
-# meaning:
-#
-#   - Each objective is attempted exactly once
-#   - No retries are allowed
-#   - Any failure ends the run
-#
-# It does NOT represent:
-#
-#   - The probability of eventual success with retries
-#   - The probability of finishing after multiple failures
-#
-#
-# Mathematical Assumption:
-# ------------------------
-# This model assumes independence between objectives,
-# meaning the probability of success at one objective
-# does not directly affect another.
-#
-# While not perfectly true in practice, this provides a
-# useful and intuitive estimate of full-run reliability.
-#
-#
-# Why This Is Useful:
-# -------------------
-# The cumulative probability drops as more objectives
-# are included, highlighting weak points in the sequence.
-#
-# If one objective has a low success rate, it will cause
-# a sharp drop in the cumulative probability, making it
-# easy to identify where improvement is needed.
-#
-#
-# Summary:
-# --------
-# This visualization shows:
-#
-#   "Based on my last 20 attempts per objective,
-#    what is the chance I would clear ALL objectives
-#    perfectly in one uninterrupted run?"
-#
-# ============================================================
-class CumulativeSuccessProbabilityPlot(BasePlot):
+
+class RunSuccessProbabilityTimelinePlot(BasePlot):
+    """
+    RUN SUCCESS PROBABILITY OVER TIME (DYNAMIC VIEW)
+
+    PURPOSE
+    -------
+    This plot shows how the estimated probability of completing
+    a full run changes over time based on recent performance.
+
+    It is NOT a single static value — it is a time series.
+
+    HOW IT WORKS
+    -------------
+    - Each objective has a rolling success rate computed from
+      the last N attempts (ROLLING_WINDOW).
+
+    - At each time step t:
+        P(run success at time t) =
+            P(obj1 at t) *
+            P(obj2 at t) *
+            P(obj3 at t) * ...
+
+    - This produces a continuously changing estimate of how
+      "viable" a full run is over time.
+
+    INTERPRETATION
+    --------------
+    This plot answers:
+
+        "If my current consistency per objective stayed the same,
+         how likely would I be to complete a full run?"
+
+    SPEEDRUN USE CASE
+    -----------------
+    Useful for tracking:
+    - Improvement over time
+    - Degradation of consistency
+    - Overall run viability trend
+
+    LIMITATIONS
+    -----------
+    - Assumes independence between objectives
+    - Uses aligned rolling windows (not true session coupling)
+    - Does not represent actual full-run outcomes
+    """
 
     def __init__(self, window):
         self.window = window
@@ -380,25 +306,17 @@ class CumulativeSuccessProbabilityPlot(BasePlot):
 
         ax.clear()
 
-        # alphabetical order (IMPORTANT requirement)
         objective_names = sorted(data.keys())
 
-        print("\n=== Objective Execution Order (Alphabetical) ===")
-        for i, name in enumerate(objective_names, 1):
-            print(f"{i}. {name}")
-        print("================================================\n")
-
-        # build per-objective rolling windows over time
         history = defaultdict(list)
-
         max_steps = 0
 
+        # Build rolling success history per objective
         for name in objective_names:
 
             sessions = data[name]
 
             all_results = []
-
             for sid in sorted(sessions.keys()):
                 all_results.extend(sessions[sid])
 
@@ -409,16 +327,16 @@ class CumulativeSuccessProbabilityPlot(BasePlot):
                 window.append(r)
 
                 if len(window) == self.window:
-                    rolling_rate = sum(window) / self.window
+                    rate = sum(window) / self.window
                 else:
-                    rolling_rate = sum(window) / len(window) if window else 0
+                    rate = sum(window) / len(window) if window else 0
 
-                rolling.append(rolling_rate)
+                rolling.append(rate)
 
             history[name] = rolling
             max_steps = max(max_steps, len(rolling))
 
-        # compute compounded probability over time
+        # Compute cumulative probability over time
         x_vals = []
         y_vals = []
 
@@ -429,13 +347,10 @@ class CumulativeSuccessProbabilityPlot(BasePlot):
             for name in objective_names:
 
                 series = history[name]
-
                 if not series:
                     continue
 
-                # clamp to last known value
                 idx = min(t, len(series) - 1)
-
                 prob *= series[idx]
 
             x_vals.append(t)
@@ -444,13 +359,127 @@ class CumulativeSuccessProbabilityPlot(BasePlot):
         ax.plot(x_vals, y_vals)
 
         ax.set_title(
-            f"Cumulative Success Probability Across Objectives\n"
-            f"(Alphabetical Order, Rolling Window = {self.window})"
+            f"Run Success Probability Timeline\n"
+            f"(Rolling Window = {self.window})"
         )
 
-        ax.set_xlabel("Attempt Step (Global)")
-        ax.set_ylabel("Success Probability %")
+        ax.set_xlabel("Time Step (Aligned Rolling Index)")
+        ax.set_ylabel("Estimated Full Run Success %")
+        ax.set_ylim(0, 100)
 
+
+class CurrentRunSurvivalByObjectivePlot(BasePlot):
+    """
+    CURRENT RUN SURVIVAL BY OBJECTIVE (SNAPSHOT VIEW)
+
+    PURPOSE
+    -------
+    This plot shows how a full run survives as it progresses
+    through each objective, using ONLY the most recent
+    performance snapshot per objective.
+
+    It produces exactly one value per objective.
+
+    HOW IT WORKS
+    -------------
+    - Each objective's success rate is computed using the
+      last N attempts (ROLLING_WINDOW).
+
+    - These are treated as the "current skill level" per objective.
+
+    - The run probability is then computed sequentially:
+
+        P1 = Obj1
+        P2 = P1 * Obj2
+        P3 = P2 * Obj3
+        ...
+
+    - This produces a downward curve representing how a run
+      survives step-by-step.
+
+    INTERPRETATION
+    --------------
+    This plot answers:
+
+        "If I attempted a run right now, where would it fail?"
+
+    It shows:
+    - Which objectives reduce run viability the most
+    - How quickly a run collapses under current conditions
+
+    SPEEDRUN USE CASE
+    -----------------
+    Useful for:
+    - Identifying run-killing objectives
+    - Prioritizing practice targets
+    - Understanding current bottlenecks
+
+    IMPORTANT CHARACTERISTIC
+    -----------------------
+    Unlike the timeline plot, this is:
+    - NOT time-based
+    - NOT historical
+    - A single snapshot of current run performance
+
+    LIMITATIONS
+    -----------
+    - Assumes objective independence
+    - Uses rolling averages as proxy for skill
+    - Does not simulate real run sessions
+    """
+
+    def __init__(self, window):
+        self.window = window
+
+    def update(self, ax, data):
+
+        ax.clear()
+
+        objective_names = sorted(data.keys())
+
+        per_objective_prob = []
+
+        # Compute latest performance per objective
+        for name in objective_names:
+
+            sessions = data[name]
+
+            all_results = []
+            for sid in sorted(sessions.keys()):
+                all_results.extend(sessions[sid])
+
+            if not all_results:
+                continue
+
+            recent = all_results[-self.window:]
+
+            if not recent:
+                continue
+
+            per_objective_prob.append(sum(recent) / len(recent))
+
+        # Compute cumulative survival chain
+        cumulative = []
+        prob = 1.0
+
+        for p in per_objective_prob:
+            prob *= p
+            cumulative.append(prob * 100)
+
+        x_vals = list(range(1, len(cumulative) + 1))
+
+        ax.plot(x_vals, cumulative, marker="o")
+
+        ax.set_xticks(x_vals)
+        ax.set_xticklabels(objective_names, rotation=45, ha="right")
+
+        ax.set_title(
+            f"Current Run Survival by Objective\n"
+            f"(Rolling Window = {self.window})"
+        )
+
+        ax.set_xlabel("Objective Order")
+        ax.set_ylabel("Run Survival Probability %")
         ax.set_ylim(0, 100)
 
 
@@ -475,9 +504,29 @@ class PlotManager:
 
             SessionProgressPlot(),
 
-            CumulativeSuccessProbabilityPlot(ROLLING_WINDOW),
+            RunSuccessProbabilityTimelinePlot(ROLLING_WINDOW),
 
+            CurrentRunSurvivalByObjectivePlot(ROLLING_WINDOW),
         ]
+
+
+        figsize = self._compute_figsize(len(self.plots))
+
+        self.fig = plt.figure(figsize=figsize)
+        self.fig.canvas.manager.set_window_title("Tally Visualizations")
+
+    def _compute_figsize(self, n_plots):
+        cols = math.ceil(math.sqrt(n_plots))
+        rows = math.ceil(n_plots / cols)
+
+        # size per subplot (tweakable)
+        width_per_plot = 6
+        height_per_plot = 4
+
+        return (
+            cols * width_per_plot,
+            rows * height_per_plot
+        )
 
     def _build_axes(self):
 

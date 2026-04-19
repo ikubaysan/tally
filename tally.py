@@ -201,10 +201,10 @@ class Database:
         )
         """)
 
-        cur.execute("""
-        INSERT OR IGNORE INTO objectives (name)
-        VALUES ('default')
-        """)
+        # cur.execute("""
+        # INSERT OR IGNORE INTO objectives (name)
+        # VALUES ('default')
+        # """)
 
         self.conn.commit()
 
