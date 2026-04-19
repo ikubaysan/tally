@@ -31,7 +31,6 @@ class Database:
 
         cur = self.conn.cursor()
 
-        # OBJECTIVES
         cur.execute("""
         CREATE TABLE IF NOT EXISTS objectives (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -39,7 +38,6 @@ class Database:
         )
         """)
 
-        # SESSIONS
         cur.execute("""
         CREATE TABLE IF NOT EXISTS sessions (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -51,13 +49,14 @@ class Database:
         )
         """)
 
-        # ATTEMPTS (INTEGER result)
+        # Updated attempts schema
         cur.execute("""
         CREATE TABLE IF NOT EXISTS attempts (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             objective_id INTEGER NOT NULL,
             session_id INTEGER NOT NULL,
-            timestamp TEXT NOT NULL,
+            start_time TEXT NOT NULL,
+            end_time TEXT NOT NULL,
             result INTEGER NOT NULL,
             FOREIGN KEY(objective_id)
                 REFERENCES objectives(id)
@@ -68,7 +67,15 @@ class Database:
         )
         """)
 
-        # Ensure default exists
+        # Add column if DB already exists
+        try:
+            cur.execute("""
+            ALTER TABLE attempts
+            ADD COLUMN end_time TEXT
+            """)
+        except sqlite3.OperationalError:
+            pass
+
         cur.execute("""
         INSERT OR IGNORE INTO objectives (name)
         VALUES ('default')
@@ -144,7 +151,14 @@ class Database:
 
     # -------------------------
 
-    def log_attempt(self, objective_id, session_id, result):
+    def log_attempt(
+        self,
+        objective_id,
+        session_id,
+        start_time,
+        end_time,
+        result
+    ):
 
         cur = self.conn.cursor()
 
@@ -152,14 +166,16 @@ class Database:
         INSERT INTO attempts (
             objective_id,
             session_id,
-            timestamp,
+            start_time,
+            end_time,
             result
         )
-        VALUES (?, ?, ?, ?)
+        VALUES (?, ?, ?, ?, ?)
         """, (
             objective_id,
             session_id,
-            datetime.now().isoformat(),
+            start_time,
+            end_time,
             result
         ))
 
@@ -187,12 +203,35 @@ class Session:
         self.completed = False
         self.session_id = None
 
+        # NEW: track attempt start time
+        self.last_attempt_time = datetime.now()
+
     # -------------------------
 
     def _ensure_session(self):
 
         if self.session_id is None:
             self.session_id = self.db.create_session(self.objective_id)
+
+    # -------------------------
+
+    def _log_attempt(self, result):
+
+        now = datetime.now()
+
+        start_time = self.last_attempt_time.isoformat()
+        end_time = now.isoformat()
+
+        self.db.log_attempt(
+            self.objective_id,
+            self.session_id,
+            start_time,
+            end_time,
+            result
+        )
+
+        # reset timer for next attempt
+        self.last_attempt_time = now
 
     # -------------------------
 
@@ -205,11 +244,7 @@ class Session:
 
         self.successes += 1
 
-        self.db.log_attempt(
-            self.objective_id,
-            self.session_id,
-            1   # SUCCESS
-        )
+        self._log_attempt(1)
 
         if self.successes >= self.target:
             self.completed = True
@@ -225,11 +260,7 @@ class Session:
 
         self.failures += 1
 
-        self.db.log_attempt(
-            self.objective_id,
-            self.session_id,
-            0   # FAILURE
-        )
+        self._log_attempt(0)
 
     # -------------------------
 
@@ -260,6 +291,7 @@ class Tracker:
         self.locked = False
 
         self.session = None
+        self.last_selected = None
 
         self._register_hotkeys()
 
@@ -286,6 +318,13 @@ class Tracker:
             for idx, (_, name) in enumerate(objectives, start=1):
                 print(f"  {idx:>{width}}. {name}")
 
+            if self.last_selected is not None:
+
+                num, name = self.last_selected
+
+                print("\nPreviously Selected Objective:")
+                print(f"  {num}. {name}")
+
             print("\nOptions:")
             print("  [number] Choose objective")
             print("  A        Add objective")
@@ -303,9 +342,16 @@ class Tracker:
 
                 obj_id, name = objectives[num - 1]
 
+                self.last_selected = (num, name)
+
                 target = self._ask_target()
 
-                self.session = Session(obj_id, name, target, self.db)
+                self.session = Session(
+                    obj_id,
+                    name,
+                    target,
+                    self.db
+                )
 
                 print(f"\nStarted: {name} (target: {target})\n")
                 return
@@ -455,6 +501,7 @@ class Tracker:
     def run(self):
 
         print("Started\n")
+
         self.print_bindings()
         self.choose_objective()
 
