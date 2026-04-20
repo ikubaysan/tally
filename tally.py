@@ -109,6 +109,17 @@ class InputManager:
 
         self.keyboard_hooks = []
 
+
+    def print_bindings(self):
+
+        kb = self.config["keyboard"]
+
+        print("\nKey Bindings:")
+        print(f"  Success   : {kb['success']}")
+        print(f"  Failure   : {kb['failure']}")
+        print(f"  Early End : {kb['early_end']}")
+        print()
+
     def bind_keyboard(self, tracker):
 
         self.keyboard_hooks.append(
@@ -303,6 +314,14 @@ class Session:
         self.session_id = None
         self.last_attempt_time = datetime.now()
 
+    def elapsed_str(self):
+
+        delta = datetime.now() - self.start_time
+
+        total = int(delta.total_seconds())
+
+        return f"{total//3600:02}:{(total%3600)//60:02}:{total%60:02}"
+
     def total_attempts(self):
         return self.successes + self.failures
 
@@ -479,6 +498,10 @@ class Tracker:
             for i, (_, name) in enumerate(objs, 1):
                 print(f"  {i:>{width}}. {name}")
 
+            if self.last_completed_objective:
+                name, obj_id = self.last_completed_objective
+                print(f"\n  ✔ Last Completed: {obj_id - 1}. {name}\n")
+
             choice = input("\nChoice: ").strip()
 
             if choice.isdigit():
@@ -500,6 +523,15 @@ class Tracker:
                     self.obs.start()
 
                     self.input_manager.bind_keyboard(self)
+
+                    print("\n" + "=" * 40)
+
+                    print(f"Started Session: {name}")
+                    print(f"Target Successes: {target}")
+
+                    self.input_manager.print_bindings()
+
+                    print("=" * 40)
 
                     print(f"\nStarted: {name}")
                     return
@@ -525,6 +557,8 @@ class Tracker:
 
         if not self.session.completed:
             return
+
+        self.last_completed_objective = (self.session.name, self.session.objective_id)
 
         print("\n\n--- COMPLETE ---")
         print(f"Objective: {self.session.name}")
@@ -566,7 +600,6 @@ class Tracker:
             self.show()
 
             self.window_controller.send_hotkey()
-
     # -------------------------
 
     def cleanup(self):
