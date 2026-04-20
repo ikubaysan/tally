@@ -99,7 +99,7 @@ class OverallSuccessPlot(BasePlot):
 
         ax.set_title("Overall Success Rate per Objective")
         ax.set_ylabel("Success %")
-        ax.set_ylim(0, 100)
+        #ax.set_ylim(0, 100)
 
         ax.tick_params(axis='x', rotation=45)
 
@@ -148,7 +148,7 @@ class RecentSuccessPlot(BasePlot):
         )
 
         ax.set_ylabel("Success %")
-        ax.set_ylim(0, 100)
+        #ax.set_ylim(0, 100)
 
         ax.tick_params(axis='x', rotation=45)
 
@@ -193,7 +193,7 @@ class SessionProgressPlot(BasePlot):
             MaxNLocator(integer=True)
         )
 
-        ax.set_ylim(0, 100)
+        #ax.set_ylim(0, 100)
 
         if ax.get_legend_handles_labels()[0]:
             ax.legend()
@@ -247,7 +247,7 @@ class RollingSuccessPlot(BasePlot):
         ax.set_xlabel("Attempt")
         ax.set_ylabel("Success %")
 
-        ax.set_ylim(0, 100)
+        #ax.set_ylim(0, 100)
 
         if ax.get_legend_handles_labels()[0]:
             ax.legend()
@@ -256,50 +256,6 @@ class RollingSuccessPlot(BasePlot):
 
 
 class RunSuccessProbabilityTimelinePlot(BasePlot):
-    """
-    RUN SUCCESS PROBABILITY OVER TIME (DYNAMIC VIEW)
-
-    PURPOSE
-    -------
-    This plot shows how the estimated probability of completing
-    a full run changes over time based on recent performance.
-
-    It is NOT a single static value — it is a time series.
-
-    HOW IT WORKS
-    -------------
-    - Each objective has a rolling success rate computed from
-      the last N attempts (ROLLING_WINDOW).
-
-    - At each time step t:
-        P(run success at time t) =
-            P(obj1 at t) *
-            P(obj2 at t) *
-            P(obj3 at t) * ...
-
-    - This produces a continuously changing estimate of how
-      "viable" a full run is over time.
-
-    INTERPRETATION
-    --------------
-    This plot answers:
-
-        "If my current consistency per objective stayed the same,
-         how likely would I be to complete a full run?"
-
-    SPEEDRUN USE CASE
-    -----------------
-    Useful for tracking:
-    - Improvement over time
-    - Degradation of consistency
-    - Overall run viability trend
-
-    LIMITATIONS
-    -----------
-    - Assumes independence between objectives
-    - Uses aligned rolling windows (not true session coupling)
-    - Does not represent actual full-run outcomes
-    """
 
     def __init__(self, window):
         self.window = window
@@ -310,125 +266,109 @@ class RunSuccessProbabilityTimelinePlot(BasePlot):
 
         objective_names = sorted(data.keys())
 
-        history = defaultdict(list)
-        max_steps = 0
+        # =========================
+        # Step 1 — Flatten attempts
+        # =========================
 
-        # Build rolling success history per objective
+        attempts_per_objective = {}
+
         for name in objective_names:
 
             sessions = data[name]
 
             all_results = []
+
             for sid in sorted(sessions.keys()):
                 all_results.extend(sessions[sid])
 
-            window = deque(maxlen=self.window)
-            rolling = []
+            if all_results:
+                attempts_per_objective[name] = all_results
 
-            for r in all_results:
+        if not attempts_per_objective:
+            return
+
+        # =========================
+        # Step 2 — Find minimum length
+        # =========================
+
+        min_len = min(
+            len(v)
+            for v in attempts_per_objective.values()
+        )
+
+        if min_len == 0:
+            return
+
+        # =========================
+        # Step 3 — Trim to aligned length
+        # =========================
+
+        aligned = {}
+
+        for name, attempts in attempts_per_objective.items():
+            aligned[name] = attempts[-min_len:]
+
+        # =========================
+        # Step 4 — Compute rolling rates
+        # =========================
+
+        rolling_history = defaultdict(list)
+
+        for name in objective_names:
+
+            attempts = aligned[name]
+
+            window = deque(maxlen=self.window)
+
+            for r in attempts:
+
                 window.append(r)
 
-                if len(window) == self.window:
-                    rate = sum(window) / self.window
-                else:
-                    rate = sum(window) / len(window) if window else 0
+                rate = sum(window) / len(window)
 
-                rolling.append(rate)
+                rolling_history[name].append(rate)
 
-            history[name] = rolling
-            max_steps = max(max_steps, len(rolling))
+        # =========================
+        # Step 5 — Compute run probability timeline
+        # =========================
 
-        # Compute cumulative probability over time
         x_vals = []
         y_vals = []
 
-        for t in range(max_steps):
+        for t in range(min_len):
 
             prob = 1.0
 
             for name in objective_names:
 
-                series = history[name]
-                if not series:
-                    continue
+                prob *= rolling_history[name][t]
 
-                idx = min(t, len(series) - 1)
-                prob *= series[idx]
-
-            x_vals.append(t)
+            x_vals.append(t + 1)
             y_vals.append(prob * 100)
 
         ax.plot(x_vals, y_vals)
 
         ax.set_title(
             f"Run Success Probability Timeline\n"
-            f"(Rolling Window = {self.window})"
+            f"(Aligned Length = {min_len}, "
+            f"Rolling Window = {self.window})"
         )
 
-        ax.set_xlabel("Time Step (Aligned Rolling Index)")
-        ax.set_ylabel("Estimated Full Run Success %")
-        ax.set_ylim(0, 100)
+        ax.set_xlabel(
+            "Aligned Attempt Index "
+            "(All Objectives)"
+        )
+
+        ax.set_ylabel(
+            "Estimated Full Run Success %"
+        )
+
+        #ax.set_ylim(0, 100)
+
+
 
 
 class CurrentRunSurvivalByObjectivePlot(BasePlot):
-    """
-    CURRENT RUN SURVIVAL BY OBJECTIVE (SNAPSHOT VIEW)
-
-    PURPOSE
-    -------
-    This plot shows how a full run survives as it progresses
-    through each objective, using ONLY the most recent
-    performance snapshot per objective.
-
-    It produces exactly one value per objective.
-
-    HOW IT WORKS
-    -------------
-    - Each objective's success rate is computed using the
-      last N attempts (ROLLING_WINDOW).
-
-    - These are treated as the "current skill level" per objective.
-
-    - The run probability is then computed sequentially:
-
-        P1 = Obj1
-        P2 = P1 * Obj2
-        P3 = P2 * Obj3
-        ...
-
-    - This produces a downward curve representing how a run
-      survives step-by-step.
-
-    INTERPRETATION
-    --------------
-    This plot answers:
-
-        "If I attempted a run right now, where would it fail?"
-
-    It shows:
-    - Which objectives reduce run viability the most
-    - How quickly a run collapses under current conditions
-
-    SPEEDRUN USE CASE
-    -----------------
-    Useful for:
-    - Identifying run-killing objectives
-    - Prioritizing practice targets
-    - Understanding current bottlenecks
-
-    IMPORTANT CHARACTERISTIC
-    -----------------------
-    Unlike the timeline plot, this is:
-    - NOT time-based
-    - NOT historical
-    - A single snapshot of current run performance
-
-    LIMITATIONS
-    -----------
-    - Assumes objective independence
-    - Uses rolling averages as proxy for skill
-    - Does not simulate real run sessions
-    """
 
     def __init__(self, window):
         self.window = window
@@ -439,32 +379,74 @@ class CurrentRunSurvivalByObjectivePlot(BasePlot):
 
         objective_names = sorted(data.keys())
 
-        per_objective_prob = []
+        # =========================
+        # Step 1 — Flatten attempts
+        # =========================
 
-        # Compute latest performance per objective
+        attempts_per_objective = {}
+
         for name in objective_names:
 
             sessions = data[name]
 
             all_results = []
+
             for sid in sorted(sessions.keys()):
                 all_results.extend(sessions[sid])
 
-            if not all_results:
-                continue
+            if all_results:
+                attempts_per_objective[name] = all_results
 
-            recent = all_results[-self.window:]
+        if not attempts_per_objective:
+            return
 
-            if not recent:
-                continue
+        # =========================
+        # Step 2 — Find minimum length
+        # =========================
 
-            per_objective_prob.append(sum(recent) / len(recent))
+        min_len = min(
+            len(v)
+            for v in attempts_per_objective.values()
+        )
 
-        # Compute cumulative survival chain
+        if min_len == 0:
+            return
+
+        # =========================
+        # Step 3 — Trim to aligned length
+        # =========================
+
+        aligned = {}
+
+        for name, attempts in attempts_per_objective.items():
+            aligned[name] = attempts[-min_len:]
+
+        # =========================
+        # Step 4 — Compute per-objective
+        # =========================
+
+        per_objective_prob = []
+
+        for name in objective_names:
+
+            attempts = aligned[name]
+
+            recent = attempts[-self.window:]
+
+            prob = sum(recent) / len(recent)
+
+            per_objective_prob.append(prob)
+
+        # =========================
+        # Step 5 — Cumulative survival
+        # =========================
+
         cumulative = []
+
         prob = 1.0
 
         for p in per_objective_prob:
+
             prob *= p
             cumulative.append(prob * 100)
 
@@ -473,17 +455,26 @@ class CurrentRunSurvivalByObjectivePlot(BasePlot):
         ax.plot(x_vals, cumulative, marker="o")
 
         ax.set_xticks(x_vals)
-        ax.set_xticklabels(objective_names, rotation=45, ha="right")
+
+        ax.set_xticklabels(
+            objective_names,
+            rotation=45,
+            ha="right"
+        )
 
         ax.set_title(
             f"Current Run Survival by Objective\n"
-            f"(Rolling Window = {self.window})"
+            f"(Aligned Length = {min_len}, "
+            f"Rolling Window = {self.window})"
         )
 
-        ax.set_xlabel("Objective Order")
-        ax.set_ylabel("Run Survival Probability %")
-        ax.set_ylim(0, 100)
+        ax.set_xlabel("Objective")
 
+        ax.set_ylabel(
+            "Run Survival Probability %"
+        )
+
+        #ax.set_ylim(0, 100)
 
 
 # =========================
