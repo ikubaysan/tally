@@ -411,7 +411,7 @@ class Tracker:
             f"__attempts{s.total_attempts()}"
             f"__success{s.successes}"
             f"__fail{s.failures}"
-            f"__rate{s.success_rate()}pct"
+            f"__successrate{s.success_rate()}pct"
             ".mp4"
         )
 
