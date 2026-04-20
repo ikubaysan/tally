@@ -4,3 +4,4 @@ pywinauto
 pyautogui
 keyboard
 pygame
+obsws-python

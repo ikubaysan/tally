@@ -15,7 +15,10 @@ import math
 DB_FILE = "tally.db"
 CHECK_INTERVAL_SECONDS = 10
 ROLLING_WINDOW = 20
+
+plt.style.use("Solarize_Light2")
 #plt.style.use("dark_background")
+
 
 # =========================
 # Data Loader
