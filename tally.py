@@ -4,14 +4,95 @@ import threading
 from datetime import datetime
 from WindowController import WindowController
 import time
+import os
+import shutil
+import re
+import atexit
+
+from obsws_python import ReqClient
 
 
 DB_FILE = "tally.db"
 WINDOW_TITLE_KEYWORDS = ["NPUB30769"]
 
+# =========================
+# NEW CONSTANT
+# =========================
+
+RECORD_SESSIONS = True
+
+OBS_HOST = "localhost"
+OBS_PORT = 4455
+OBS_PASSWORD = "your_password"
+
+SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
+
 
 # =========================
-# Input Manager (Keyboard Only)
+# Utilities
+# =========================
+
+def filesafe(text):
+    """Make string safe for filenames."""
+    text = text.strip()
+    text = re.sub(r'[<>:"/\\|?*]', "_", text)
+    text = re.sub(r"\s+", "_", text)
+    return text
+
+
+# =========================
+# OBS Recorder
+# =========================
+
+class OBSRecorder:
+
+    def __init__(self):
+
+        self.client = None
+        self.recording = False
+
+        if RECORD_SESSIONS:
+            self.client = ReqClient(
+                host=OBS_HOST,
+                port=OBS_PORT,
+                password=OBS_PASSWORD
+            )
+
+    def start(self):
+
+        if not RECORD_SESSIONS:
+            return
+
+        if self.recording:
+            return
+
+        self.client.start_record()
+
+        self.recording = True
+
+        print("\n[OBS] Recording started")
+
+    def stop(self):
+
+        if not RECORD_SESSIONS:
+            return None
+
+        if not self.recording:
+            return None
+
+        response = self.client.stop_record()
+
+        self.recording = False
+
+        path = response.output_path
+
+        print(f"\n[OBS] Recording saved: {path}")
+
+        return path
+
+
+# =========================
+# Input Manager
 # =========================
 
 class InputManager:
@@ -21,13 +102,12 @@ class InputManager:
         self.config = {
             "keyboard": {
                 "success": "up",
-                "failure": "down"
+                "failure": "down",
+                "early_end": "ctrl+q"
             }
         }
 
         self.keyboard_hooks = []
-
-    # -------------------------
 
     def bind_keyboard(self, tracker):
 
@@ -45,6 +125,13 @@ class InputManager:
             )
         )
 
+        self.keyboard_hooks.append(
+            keyboard.add_hotkey(
+                self.config["keyboard"]["early_end"],
+                tracker.early_end_session
+            )
+        )
+
     def unbind_keyboard(self):
 
         for h in self.keyboard_hooks:
@@ -54,7 +141,7 @@ class InputManager:
 
 
 # =========================
-# Database
+# Database (unchanged)
 # =========================
 
 class Database:
@@ -81,6 +168,7 @@ class Database:
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             objective_id INTEGER NOT NULL,
             start_time TEXT NOT NULL,
+            video_path TEXT,
             FOREIGN KEY(objective_id)
                 REFERENCES objectives(id)
                 ON DELETE CASCADE
@@ -104,6 +192,32 @@ class Database:
         )
         """)
 
+        # Migration safety (adds column if missing)
+
+        cur.execute("PRAGMA table_info(sessions)")
+        columns = [row[1] for row in cur.fetchall()]
+
+        if "video_path" not in columns:
+            cur.execute("""
+            ALTER TABLE sessions
+            ADD COLUMN video_path TEXT
+            """)
+
+            print("[DB] Added video_path column")
+
+        self.conn.commit()
+
+    def set_session_video_path(self, session_id, path):
+
+        self.conn.execute("""
+        UPDATE sessions
+        SET video_path = ?
+        WHERE id = ?
+        """, (
+            path,
+            session_id
+        ))
+
         self.conn.commit()
 
     def get_objectives(self):
@@ -123,14 +237,6 @@ class Database:
             return True
         except sqlite3.IntegrityError:
             return False
-
-    def remove_objective(self, obj_id):
-
-        self.conn.execute(
-            "DELETE FROM objectives WHERE id = ?",
-            (obj_id,)
-        )
-        self.conn.commit()
 
     def create_session(self, objective_id):
 
@@ -197,7 +303,17 @@ class Session:
         self.session_id = None
         self.last_attempt_time = datetime.now()
 
-    # -------------------------
+    def total_attempts(self):
+        return self.successes + self.failures
+
+    def success_rate(self):
+
+        total = self.total_attempts()
+
+        if total == 0:
+            return 0
+
+        return round((self.successes / total) * 100)
 
     def _ensure_session(self):
 
@@ -219,8 +335,6 @@ class Session:
         )
 
         self.last_attempt_time = now
-
-    # -------------------------
 
     def success(self):
 
@@ -245,17 +359,6 @@ class Session:
         self.failures += 1
         self._log_attempt(0)
 
-    def elapsed_str(self):
-
-        delta = datetime.now() - self.start_time
-        t = int(delta.total_seconds())
-
-        return (
-            f"{t//3600:02}:"
-            f"{(t%3600)//60:02}:"
-            f"{t%60:02}"
-        )
-
 
 # =========================
 # Tracker
@@ -272,40 +375,98 @@ class Tracker:
 
         self.db = Database()
         self.input_manager = InputManager()
+        self.obs = OBSRecorder()
 
         self.lock = threading.Lock()
-        self.locked = False
 
         self.session = None
-        self.keyboard_enabled = False
-
         self.last_completed_objective = None
 
-    # -------------------------
-
-    def enable_inputs(self):
-
-        self.input_manager.bind_keyboard(self)
-        self.keyboard_enabled = True
-
-    def disable_inputs(self):
-
-        self.input_manager.unbind_keyboard()
-        self.keyboard_enabled = False
+        atexit.register(self.cleanup)
 
     # -------------------------
+    def copy_recording(self, original_path):
 
-    def print_menu(self):
+        if not original_path:
+            return
 
-        print("\nOptions:")
-        print("  [number] Choose objective")
-        print("  A        Add objective")
+        s = self.session
+
+        obj_safe = filesafe(s.name)
+
+        folder = os.path.join(
+            SCRIPT_DIR,
+            "recordings",
+            obj_safe
+        )
+
+        os.makedirs(folder, exist_ok=True)
+
+        timestamp = s.start_time.strftime("%Y-%m-%d_%H-%M-%S")
+
+        filename = (
+            f"{timestamp}"
+            f"__{obj_safe}"
+            f"__target{s.target}"
+            f"__attempts{s.total_attempts()}"
+            f"__success{s.successes}"
+            f"__fail{s.failures}"
+            f"__rate{s.success_rate()}pct"
+            ".mp4"
+        )
+
+        dest_path = os.path.join(folder, filename)
+
+        shutil.copy2(original_path, dest_path)
+
+        print(f"[OBS] Copied to: {dest_path}")
+
+        # Store RELATIVE path in DB
+
+        relative_path = os.path.relpath(
+            dest_path,
+            SCRIPT_DIR
+        )
+
+        if s.session_id:
+            self.db.set_session_video_path(
+                s.session_id,
+                relative_path
+            )
+
+            print(
+                f"[DB] Stored video path: "
+                f"{relative_path}"
+            )
+    # -------------------------
+
+    def finalize_session(self):
+
+        video_path = self.obs.stop()
+
+        if video_path:
+            self.copy_recording(video_path)
+
+    # -------------------------
+
+    def early_end_session(self):
+
+        with self.lock:
+
+            if self.session is None:
+                return
+
+            print("\n\n[EARLY END]")
+
+            self.session.completed = True
+
+            self.handle_completion()
 
     # -------------------------
 
     def choose_objective(self):
 
-        self.disable_inputs()
+        self.input_manager.unbind_keyboard()
 
         while True:
 
@@ -318,18 +479,7 @@ class Tracker:
             for i, (_, name) in enumerate(objs, 1):
                 print(f"  {i:>{width}}. {name}")
 
-            if self.last_completed_objective:
-
-                name, obj_id = self.last_completed_objective
-
-                print(
-                    f"\n  ✔ Last Completed: "
-                    f"{obj_id - 1}. {name}\n"
-                )
-
-            self.print_menu()
-
-            choice = input("\nChoice: ").strip().lower()
+            choice = input("\nChoice: ").strip()
 
             if choice.isdigit():
 
@@ -347,15 +497,12 @@ class Tracker:
                         self.db
                     )
 
-                    self.enable_inputs()
+                    self.obs.start()
+
+                    self.input_manager.bind_keyboard(self)
 
                     print(f"\nStarted: {name}")
                     return
-
-            elif choice == "a":
-
-                name = input("Name: ")
-                self.db.add_objective(name)
 
     # -------------------------
 
@@ -364,29 +511,31 @@ class Tracker:
         s = self.session
 
         print(
-            f"\r{s.name} | "
-            f"{s.successes}/{s.target} | "
-            f"fail {s.failures} | "
-            f"{s.elapsed_str()}",
+            f"\rObjective: {s.name} | "
+            f"Success: {s.successes}/{s.target} | "
+            f"Fail: {s.failures} | "
+            f"Time: {s.elapsed_str()}",
             end=""
         )
 
     # -------------------------
+
 
     def handle_completion(self):
 
         if not self.session.completed:
             return
 
-        self.last_completed_objective = (
-            self.session.name,
-            self.session.objective_id
-        )
-
         print("\n\n--- COMPLETE ---")
+        print(f"Objective: {self.session.name}")
+        print(f"Success: {self.session.successes}")
+        print(f"Fail: {self.session.failures}")
         print(self.session.name)
 
-        self.disable_inputs()
+        self.finalize_session()
+
+        self.input_manager.unbind_keyboard()
+
         self.choose_objective()
 
     # -------------------------
@@ -395,7 +544,7 @@ class Tracker:
 
         with self.lock:
 
-            if self.session is None or self.locked:
+            if self.session is None:
                 return
 
             self.session.success()
@@ -410,13 +559,22 @@ class Tracker:
 
         with self.lock:
 
-            if self.session is None or self.locked:
+            if self.session is None:
                 return
 
             self.session.failure()
             self.show()
 
             self.window_controller.send_hotkey()
+
+    # -------------------------
+
+    def cleanup(self):
+
+        print("\n[Shutdown] Cleaning up...")
+
+        if self.session:
+            self.finalize_session()
 
     # -------------------------
 
