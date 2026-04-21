@@ -481,6 +481,32 @@ class Tracker:
 
             self.handle_completion()
 
+    def start_session(self, obj_id, name):
+
+        target = 10
+
+        self.session = Session(
+            obj_id,
+            name,
+            target,
+            self.db
+        )
+
+        self.obs.start()
+
+        self.input_manager.bind_keyboard(self)
+
+        print("\n" + "=" * 40)
+
+        print(f"Started Session: {name}")
+        print(f"Target Successes: {target}")
+
+        self.input_manager.print_bindings()
+
+        print("=" * 40)
+
+        print(f"\nStarted: {name}")
+
     # -------------------------
 
     def choose_objective(self):
@@ -499,41 +525,45 @@ class Tracker:
                 print(f"  {i:>{width}}. {name}")
 
             if self.last_completed_objective:
-                name, obj_id = self.last_completed_objective
-                print(f"\n  ✔ Last Completed: {obj_id - 1}. {name}\n")
+                last_name, last_obj_id = self.last_completed_objective
+
+                # Find index of last objective
+                last_index = None
+                for i, (obj_id, name) in enumerate(objs, 1):
+                    if obj_id == last_obj_id:
+                        last_index = i
+                        break
+
+                if last_index:
+                    print(
+                        f"\n  ✔ Last Completed: "
+                        f"{last_index}. {last_name}"
+                    )
+
+                    print(
+                        "  (Press ENTER to redo last objective)\n"
+                    )
 
             choice = input("\nChoice: ").strip()
+
+            # ENTER = redo last completed
+            if choice == "" and self.last_completed_objective:
+
+                last_name, last_obj_id = self.last_completed_objective
+
+                for obj_id, name in objs:
+                    if obj_id == last_obj_id:
+                        self.start_session(obj_id, name)
+                        return
 
             if choice.isdigit():
 
                 idx = int(choice)
 
                 if 1 <= idx <= len(objs):
-
                     obj_id, name = objs[idx - 1]
-                    target = 10
 
-                    self.session = Session(
-                        obj_id,
-                        name,
-                        target,
-                        self.db
-                    )
-
-                    self.obs.start()
-
-                    self.input_manager.bind_keyboard(self)
-
-                    print("\n" + "=" * 40)
-
-                    print(f"Started Session: {name}")
-                    print(f"Target Successes: {target}")
-
-                    self.input_manager.print_bindings()
-
-                    print("=" * 40)
-
-                    print(f"\nStarted: {name}")
+                    self.start_session(obj_id, name)
                     return
 
     # -------------------------

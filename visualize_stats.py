@@ -489,8 +489,8 @@ class PlotManager:
     def __init__(self):
 
         self.plots = [
-            RecentSuccessPlot(ROLLING_WINDOW),
             OverallSuccessPlot(),
+            RecentSuccessPlot(ROLLING_WINDOW),
             RollingSuccessPlot(ROLLING_WINDOW),
             SessionProgressPlot(),
             RunSuccessProbabilityTimelinePlot(ROLLING_WINDOW),
