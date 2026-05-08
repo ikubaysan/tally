@@ -299,7 +299,7 @@ class RunSuccessProbabilityTimelinePlot(BasePlot):
             for v in attempts_per_objective.values()
         )
 
-        if min_len == 0:
+        if min_len < self.window:
             return
 
         # =========================
@@ -313,6 +313,7 @@ class RunSuccessProbabilityTimelinePlot(BasePlot):
 
         # =========================
         # Step 4 — Compute rolling rates
+        # (fixed window size)
         # =========================
 
         rolling_history = defaultdict(list)
@@ -327,29 +328,41 @@ class RunSuccessProbabilityTimelinePlot(BasePlot):
 
                 window.append(r)
 
-                rate = sum(window) / len(window)
+                if len(window) == self.window:
+                    rate = sum(window) / self.window
 
-                rolling_history[name].append(rate)
+                    rolling_history[name].append(rate)
 
         # =========================
         # Step 5 — Compute run probability timeline
         # =========================
 
+        timeline_len = min(
+            len(v)
+            for v in rolling_history.values()
+        )
+
+        if timeline_len == 0:
+            return
+
         x_vals = []
         y_vals = []
 
-        for t in range(min_len):
+        for t in range(timeline_len):
 
             prob = 1.0
 
             for name in objective_names:
-
                 prob *= rolling_history[name][t]
 
             x_vals.append(t + 1)
             y_vals.append(prob * 100)
 
-        ax.plot(x_vals, y_vals)
+        ax.plot(x_vals, y_vals, marker="o")
+
+        # DEBUG: Print final timeline probability
+        if y_vals:
+            print("Timeline final:", y_vals[-1])
 
         ax.set_title(
             f"Run Success Probability Timeline\n"
@@ -365,10 +378,6 @@ class RunSuccessProbabilityTimelinePlot(BasePlot):
         ax.set_ylabel(
             "Estimated Full Run Success %"
         )
-
-        #ax.set_ylim(0, 100)
-
-
 
 
 class CurrentRunSurvivalByObjectivePlot(BasePlot):
@@ -412,7 +421,7 @@ class CurrentRunSurvivalByObjectivePlot(BasePlot):
             for v in attempts_per_objective.values()
         )
 
-        if min_len == 0:
+        if min_len < self.window:
             return
 
         # =========================
@@ -431,12 +440,11 @@ class CurrentRunSurvivalByObjectivePlot(BasePlot):
         per_objective_prob = []
 
         for name in objective_names:
-
             attempts = aligned[name]
 
             recent = attempts[-self.window:]
 
-            prob = sum(recent) / len(recent)
+            prob = sum(recent) / self.window
 
             per_objective_prob.append(prob)
 
@@ -449,13 +457,16 @@ class CurrentRunSurvivalByObjectivePlot(BasePlot):
         prob = 1.0
 
         for p in per_objective_prob:
-
             prob *= p
             cumulative.append(prob * 100)
 
         x_vals = list(range(1, len(cumulative) + 1))
 
         ax.plot(x_vals, cumulative, marker="o")
+
+        # DEBUG: Print final survival probability
+        if cumulative:
+            print("Survival final:", cumulative[-1])
 
         ax.set_xticks(x_vals)
 
@@ -476,9 +487,6 @@ class CurrentRunSurvivalByObjectivePlot(BasePlot):
         ax.set_ylabel(
             "Run Survival Probability %"
         )
-
-        #ax.set_ylim(0, 100)
-
 
 # =========================
 # Plot Manager

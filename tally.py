@@ -19,7 +19,7 @@ WINDOW_TITLE_KEYWORDS = ["NPUB30769"]
 # NEW CONSTANT
 # =========================
 
-RECORD_SESSIONS = True
+RECORD_SESSIONS = False
 
 OBS_HOST = "localhost"
 OBS_PORT = 4455
@@ -61,6 +61,7 @@ class OBSRecorder:
     def start(self):
 
         if not RECORD_SESSIONS:
+            print(f"Skipping recording start (RECORD_SESSIONS={RECORD_SESSIONS})")
             return
 
         if self.recording:
@@ -75,6 +76,7 @@ class OBSRecorder:
     def stop(self):
 
         if not RECORD_SESSIONS:
+            print(f"Skipping recording stop (RECORD_SESSIONS={RECORD_SESSIONS})")
             return None
 
         if not self.recording:
